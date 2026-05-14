@@ -1,17 +1,21 @@
+# AnalyzeMyCV
+# src/engine/analyzer.py
+
+# Import required libraries
 from openai import AzureOpenAI
 import os
 
-# Debug
-print(os.getenv("AZURE_OPENAI_ENDPOINT"))
-
+# Define get_match_report function
 def get_match_report(resume_text, jd_text):
     
+    # Initialize Azure OpenAI client
     client = AzureOpenAI(
         azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
         api_version="2025-03-01-preview" 
     )
 
+    # Create prompt content
     prompt_content = f"""
     Compare this Resume to the JD. Provide a Match Score.
     
@@ -29,7 +33,6 @@ def get_match_report(resume_text, jd_text):
             {"role": "user", "content": prompt_content}
         ]
     )
-    
-    # ...
-    # The correct attribute for the 2026 Responses API is output_text
+
+    # Return output text
     return response.output_text
