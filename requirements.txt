@@ -1,0 +1,4 @@
+streamlit
+openai>=1.20.0
+pymupdf4llm
+python-dotenv
