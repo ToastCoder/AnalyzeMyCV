@@ -1,4 +1,4 @@
-# AnalyzeMyCV 🚀
+# AnalyzeMyCV
 
 AI-powered resume analysis engine built with Streamlit and Azure OpenAI (GPT-5 Mini). Analyzes resumes against job descriptions to provide semantic scores and gap analysis, hosted on Azure App Service.
 
@@ -6,7 +6,7 @@ AI-powered resume analysis engine built with Streamlit and Azure OpenAI (GPT-5 M
 
 ---
 
-## 🛠️ Tech Stack & Architecture
+## Tech Stack & Architecture
 
 * **Frontend UI:** Streamlit (Python-driven reactive web interface)
 * **AI Engine:** Azure OpenAI API Integration (GPT-5 Mini for contextual parsing and semantic processing)
@@ -15,7 +15,7 @@ AI-powered resume analysis engine built with Streamlit and Azure OpenAI (GPT-5 M
 
 ---
 
-## 🚀 Local Quickstart & Installation Steps
+## Local Quickstart & Installation Steps
 
 Follow these exact steps to set up and run the application on your local machine.
 
