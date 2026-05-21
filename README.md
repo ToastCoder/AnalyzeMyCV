@@ -28,7 +28,7 @@ Follow these exact steps to set up and run the application on your local machine
 **Step 1: Clone the Repository**
 Clone the codebase to your local system and navigate straight into the project root directory:
 ```bash
-git clone [https://github.com/ToastCoder/AnalyzeMyCV.git](https://github.com/ToastCoder/AnalyzeMyCV.git)
+git clone https://github.com/ToastCoder/AnalyzeMyCV.git
 cd AnalyzeMyCV
 ```
 
