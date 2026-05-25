@@ -1,0 +1,17 @@
+{
+  "default_model": "gpt-5-mini",
+  "api_version": "2025-03-01-preview",
+  "logging": {
+    "default_level": "INFO"
+  },
+  "analysis_prompts": {
+    "system_role": "You are a professional AI CV Analyzer. Be thorough and provide actionable feedback.",
+    "match_report_template": [
+      "Compare this Resume to the JD. Provide a Match Score (X/10) and structured, actionable feedback detailing gaps, overlaps, and areas for improvement.",
+      "## JOB DESCRIPTION:",
+      "{job_description}",
+      "## RESUME:",
+      "{resume_text}"
+    ]
+  }
+}
