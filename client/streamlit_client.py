@@ -71,19 +71,13 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    * {
+    html, body, p, li, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select {
         font-family: 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace !important;
     }
     html, body {
         font-size: 14px !important;
     }
-    /* Aligning the heights of the file uploader and text area */
-    [data-testid="stFileUploaderDropzone"] {
-        height: 95px !important;
-        min-height: 95px !important;
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
-    }
+    /* Aligning the height of the text area to match the file uploader dropzone */
     [data-testid="stTextArea"] textarea {
         height: 95px !important;
         min-height: 95px !important;
