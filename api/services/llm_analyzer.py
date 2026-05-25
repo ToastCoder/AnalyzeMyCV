@@ -77,7 +77,8 @@ class LLMAnalyzer:
 
             if isinstance(self.client, AzureOpenAI):
                 self.logger.info("Executing Azure OpenAI analysis call...")
-                deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
+                # Use gpt-5-mini as default fallback since it is the only configured deployment
+                deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", settings.get("default_model", "gpt-5-mini"))
 
                 system_prompt = base_system_prompt
                 if job_description and match_template:
@@ -94,7 +95,18 @@ class LLMAnalyzer:
                             {"role": "user", "content": user_message},
                         ]
                     )
-                    report = response.output_text
+                    
+                    # Parse the complex Responses API output structure
+                    report = ""
+                    if hasattr(response, "output"):
+                        for item in response.output:
+                            if hasattr(item, "content") and isinstance(item.content, list):
+                                for sub_item in item.content:
+                                    if getattr(sub_item, "type", "") == "output_text":
+                                        report += getattr(sub_item, "text", "")
+                    if not report:
+                        self.logger.warning("Could not extract text from Responses API output. Falling back to string representation.")
+                        report = str(response)
                 else:
                     response = self.client.chat.completions.create(
                         model=deployment_name,
