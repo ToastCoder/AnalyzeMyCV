@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Custom
+# Local Environment
+.env
+venv/
+__pycache__/
+*.pyc
+
+# Local Data (Resumes)
+data/
+*.pdf
+
+# macOS junk
+.DS_Store

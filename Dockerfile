@@ -1,16 +1,25 @@
-FROM python:3.11-slim
+# Using Slim Base Image For Smallest Possible Footprint
+FROM python:3.10-slim
 
+# Setting Environment Variables To Prevent Python From Generating Pyc Files
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Setting Working Directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
+# Copying Requirements And Installing Dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copying The Entire Application Source Code
 COPY . .
 
-# Run the web server
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "src.app.main:app", "--bind", "0.0.0.0:80"]
+# Exposing Port For Azure Web App Service
+EXPOSE 8000
+
+# Making The Entrypoint Script Executable
+RUN chmod +x entrypoint.sh
+
+# Setting The Entrypoint To Orchestration Script
+ENTRYPOINT ["./entrypoint.sh"]
