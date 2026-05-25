@@ -29,18 +29,16 @@ class LLMAnalyzer:
         if api_key and endpoint:
             self.logger.info("Initializing Azure OpenAI client...")
             try:
-                # Parsing The Endpoint To Extract Base URL And Api Version
+                # Parsing The Endpoint To Extract Api Version If Present
                 parsed_url = urlparse(endpoint)
                 query_params = parse_qs(parsed_url.query)
-                api_version = query_params.get("api-version", ["2024-02-15-preview"])[0]
+                api_version = query_params.get("api-version", ["2025-03-01-preview"])[0]
 
-                # Constructing The Base Endpoint
-                base_endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
-
+                # We must use the full endpoint verbatim so custom routing (like /openai/responses) is preserved
                 return AzureOpenAI(
                     api_key=api_key,
                     api_version=api_version,
-                    azure_endpoint=base_endpoint,
+                    azure_endpoint=endpoint,
                 )
             except Exception as e:
                 self.logger.error(f"Failed to initialize Azure OpenAI client: {e}")
