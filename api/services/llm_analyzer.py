@@ -87,15 +87,25 @@ class LLMAnalyzer:
                 else:
                     user_message = f"Here is the resume text to analyze:\n\n{extracted_text}"
 
-                response = self.client.chat.completions.create(
-                    model=deployment_name,
-                    messages=[
-                        {"role": "developer", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ]
-                )
-
-                report = response.choices[0].message.content
+                if deployment_name == "gpt-5-mini":
+                    self.logger.info("Using Azure OpenAI Responses API for gpt-5-mini model...")
+                    response = self.client.responses.create(
+                        model=deployment_name,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ]
+                    )
+                    report = response.output_text
+                else:
+                    response = self.client.chat.completions.create(
+                        model=deployment_name,
+                        messages=[
+                            {"role": "developer", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ]
+                    )
+                    report = response.choices[0].message.content
 
                 metadata = {
                     "llm_provider": "AzureOpenAI",
