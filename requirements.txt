@@ -1,4 +1,9 @@
 streamlit
 openai>=1.20.0
 pymupdf4llm
+pymupdf
 python-dotenv
+fastapi
+uvicorn[standard]
+requests
+pydantic
