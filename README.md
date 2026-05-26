@@ -1,6 +1,6 @@
 # AnalyzeMyCV
 
-AI-powered resume analysis engine built with Streamlit and Azure OpenAI (GPT-5 Mini). Analyzes resumes against job descriptions to provide semantic scores and gap analysis, hosted on Azure App Service.
+AI-powered resume analysis engine built with a FastAPI backend, Streamlit frontend, and Azure OpenAI (GPT-5 Mini). Analyzes resumes against job descriptions to provide semantic scores and gap analysis, hosted on Azure App Service.
 
 **Production URL:** [https://tinyurl.com/analyzemycv](https://tinyurl.com/analyzemycv)
 
@@ -9,7 +9,8 @@ AI-powered resume analysis engine built with Streamlit and Azure OpenAI (GPT-5 M
 ## Tech Stack & Architecture
 
 * **Frontend UI:** Streamlit (Python-driven reactive web interface)
-* **AI Engine:** Azure OpenAI API Integration (GPT-5 Mini for contextual parsing and semantic processing)
+* **Backend API:** FastAPI (High-performance API server for robust model orchestration)
+* **AI Engine:** Azure OpenAI API Integration (GPT-5 Mini for contextual parsing and semantic processing using the Responses API)
 * **Infrastructure / Hosting:** Azure App Services (Linux Environment)
 * **CI/CD Pipeline:** GitHub Actions (`master_analyzemycv.yml` automated zip deployment via Oryx)
 
@@ -23,6 +24,7 @@ Follow these exact steps to set up and run the application on your local machine
 * **Python:** Ensure you have Python 3.9, 3.10, or 3.11 installed. You can check your version by running:
   ```bash
   python3 --version
+  ```
 * **Git:** Installed and configured on your local terminal.
 
 **Step 1: Clone the Repository**
@@ -41,8 +43,17 @@ python3 -m venv .venv
 **Step 3: Activate the Virtual Environment**
 Activate the environment before running installations. This ensures packages are bound strictly to this workspace.
 * On macOS / Linux Distributions (Ubuntu, Debian, Fedora, Arch)
+  ```bash
+  source .venv/bin/activate
+  ```
 * On Windows (Command Prompt)
+  ```cmd
+  .venv\Scripts\activate.bat
+  ```
 * On Windows (PowerShell)
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
 (Once activated, you will see (.venv) prepended to your terminal prompt line.)
 
 **Step 4: Install Project Dependencies**
@@ -53,30 +64,43 @@ pip install -r requirements.txt
 ```
 
 **Step 5: Configure Environment Variables Locally**
-Create a .env file in the root folder of your project to securely pass your API keys to the application:
+Create a .env file in the root folder of your project to securely pass your Azure OpenAI endpoints and keys to the application:
 ```bash
-OPENAI_API_KEY=your_actual_api_key_here
+AZURE_OPENAI_API_KEY=your_actual_api_key_here
+AZURE_OPENAI_ENDPOINT=https://your-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-mini
 ```
 
-**Step 6: Launch the Local Streamlit Server**
-Boot up the development instance of the web application:
+**Step 6: Launch the Local Application Services**
+The application architecture is decoupled into a backend service and a frontend client. Boot up both services concurrently using the provided shell script:
 ```bash
-python -m streamlit run src/app.py
+chmod +x ./entrypoint.sh
+./entrypoint.sh
 ```
 
-Once executed, the terminal will provide a local loopback link (usually `http://localhost:8501`). Copy and paste it into your browser to view the application live.
+Alternatively, for hot-reloading during active development, you can run them in separate isolated terminal windows:
+* **Terminal 1 (Backend):** `uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload`
+* **Terminal 2 (Frontend):** `streamlit run client/streamlit_client.py --server.port 8000`
 
-### Production Deployment (Azure App Service)
-The application is deployed securely as a custom Python web container behind an automated reverse proxy structure on Azure. Critical App Settings (Environment Variables)
+Once executed, open your browser to `http://localhost:8000` to view the application live.
+
+---
+
+## Production Deployment (Azure App Service)
+The application is deployed securely as a custom Python web container behind an automated reverse proxy structure on Azure.
+
+### Critical App Settings (Environment Variables)
 To allow heavy binary payloads and clear persistent state processing, the following variables must be configured under Settings -> Environment Variables in the Azure Portal:
-* `OPENAI_API_KEY`: Secure token validation endpoint for processing workflows.
+* `AZURE_OPENAI_API_KEY`: Secure token validation endpoint for processing workflows.
+* `AZURE_OPENAI_ENDPOINT`: Full URI string for the Azure API Gateway routing.
+* `AZURE_OPENAI_DEPLOYMENT_NAME`: Set to gpt-5-mini (the exact deployment identity configured in Azure).
 * `STREAMLIT_SERVER_MAX_UPLOAD_SIZE`: Set to 200 to prevent mobile proxy timeouts on multi-page PDF documents.
 * `SCM_DO_BUILD_DURING_DEPLOYMENT`: Set to true to invoke clean automation routines during continuous delivery runs.
   
 ### Production Startup Command
-To prevent aggressive mobile browser drops (CORS/XSRF handshake timeouts during long native file-picker selection events), the production node must be run with security relaxed selectively on proxy loops. This command should be defined symmetrically inside the Azure Portal General Settings and the GitHub Workflow YAML manifest:
+To ensure both the backend API and frontend client start concurrently and properly bind to the Azure Linux container environment, the startup configuration is managed through a bash script. This command must be defined symmetrically inside the Azure Portal Configuration settings and the GitHub Workflow YAML manifest:
 ```bash
-python -m streamlit run src/app.py --server.port 8000 --server.address 0.0.0.0 --server.enableCORS=false --server.enableXsrfProtection=false --server.maxUploadSize=200
+chmod +x ./entrypoint.sh && ./entrypoint.sh
 ```
 
 ### CI/CD Pipeline
@@ -100,5 +124,3 @@ jobs:
         with:
           python-version: '3.11'
 ```
-
-
