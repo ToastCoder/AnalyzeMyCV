@@ -5,28 +5,26 @@ import logging
 import os
 from typing import Optional
 
+import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from supabase import Client, create_client
 
 logger = logging.getLogger(__name__)
 
-supabase: Optional[Client] = None
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-try:
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-    if supabase_url and supabase_key:
-        supabase = create_client(supabase_url, supabase_key)
-        logger.info("Supabase client initialized.")
-        print("Auth: Supabase client initialized successfully.")
-    else:
-        logger.warning("SUPABASE_URL or SUPABASE_KEY not set. Auth endpoints will return 503.")
-        print("Auth: SUPABASE_URL or SUPABASE_KEY not set.")
-except Exception as e:
-    logger.error(f"Failed to initialize Supabase client: {e}")
-    print(f"Auth: Failed to initialize Supabase client: {e}")
-    supabase = None
+
+def supabase_request(method: str, path: str, json_body: dict = None) -> dict:
+    url = f"{SUPABASE_URL}{path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.request(method, url, headers=headers, json=json_body, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
 
 
 class AuthRequest(BaseModel):
@@ -46,49 +44,48 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/signup", response_model=AuthResponse)
 async def signup(body: AuthRequest):
-    if supabase is None:
-        print("Auth signup failed: Supabase not initialized")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Auth signup failed: Supabase not configured")
         raise HTTPException(status_code=503, detail="Auth service unavailable.")
     try:
         print(f"Auth signup attempt for: {body.email}")
-        result = supabase.auth.sign_up({"email": body.email, "password": body.password})
-        user = result.user
-        session = result.session
-        print(f"Auth signup success for: {body.email}, session: {session is not None}")
-        if session:
-            return AuthResponse(
-                success=True,
-                user_email=user.email,
-                access_token=session.access_token,
-            )
-        return AuthResponse(
-            success=True,
-            user_email=user.email if user else body.email,
-            message="Confirmation email sent. Check your inbox.",
-        )
-    except Exception as e:
+        data = supabase_request("POST", "/auth/v1/signup", {"email": body.email, "password": body.password})
+        access_token = data.get("access_token")
+        user_email = data.get("email") or body.email
+        print(f"Auth signup success for: {body.email}")
+        if access_token:
+            return AuthResponse(success=True, user_email=user_email, access_token=access_token)
+        return AuthResponse(success=True, user_email=user_email, message="Confirmation email sent. Check your inbox.")
+    except requests.RequestException as e:
         error_msg = str(e)
         print(f"Auth signup error for {body.email}: {error_msg}")
+        status = 400
         if "already registered" in error_msg.lower():
-            raise HTTPException(status_code=409, detail="Email already registered.")
-        raise HTTPException(status_code=400, detail=error_msg)
+            status = 409
+        raise HTTPException(status_code=status, detail=error_msg)
 
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: AuthRequest):
-    if supabase is None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Auth login failed: Supabase not configured")
         raise HTTPException(status_code=503, detail="Auth service unavailable.")
     try:
-        result = supabase.auth.sign_in_with_password({"email": body.email, "password": body.password})
-        user = result.user
-        session = result.session
-        return AuthResponse(
-            success=True,
-            user_email=user.email if user else body.email,
-            access_token=session.access_token if session else None,
+        print(f"Auth login attempt for: {body.email}")
+        data = supabase_request(
+            "POST",
+            "/auth/v1/token?grant_type=password",
+            {"email": body.email, "password": body.password},
         )
-    except Exception as e:
+        access_token = data.get("access_token")
+        user = data.get("user", {})
+        user_email = user.get("email") or body.email
+        print(f"Auth login success for: {body.email}")
+        return AuthResponse(success=True, user_email=user_email, access_token=access_token)
+    except requests.RequestException as e:
         error_msg = str(e)
+        print(f"Auth login error for {body.email}: {error_msg}")
+        status = 400
         if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
-            raise HTTPException(status_code=401, detail="Invalid email or password.")
-        raise HTTPException(status_code=400, detail=error_msg)
+            status = 401
+        raise HTTPException(status_code=status, detail=error_msg)
