@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -124,5 +125,7 @@ async def analyze_document(
 # Custom Error Handlers
 @app.exception_handler(400)
 async def validation_exception_handler(request, exc):
-    # Handling FastAPI Pydantic Validation Errors
-    return HTTPException(status_code=400, detail=f"Validation Error: {exc.detail}")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": f"Validation Error: {exc.detail}"},
+    )
