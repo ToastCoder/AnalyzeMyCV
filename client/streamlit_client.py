@@ -7,6 +7,7 @@ from typing import Optional
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Configuration
 # Pointing to the internal FastAPI server which runs on port 8080 inside Docker
@@ -102,12 +103,37 @@ st.markdown(
         min-height: 95px !important;
     }
     </style>
-    <script>
-""" + (Path(__file__).parent / "static" / "confirm.js").read_text() + """\
-    </script>
     """,
     unsafe_allow_html=True,
 )
+
+# Inject magic link handler (runs in iframe, accesses parent location)
+components.html(
+    "<script>" + (Path(__file__).parent / "static" / "confirm.js").read_text() + "</script>",
+    height=0,
+    width=0,
+)
+
+# Handle confirmation token from magic link
+confirm_token = st.query_params.get("confirm_token")
+if confirm_token:
+    try:
+        del st.query_params["confirm_token"]
+    except Exception:
+        pass
+    try:
+        resp = requests.post(
+            f"{API_URL}/auth/confirm",
+            json={"access_token": confirm_token},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("success"):
+            st.session_state.auth_session = result
+            st.rerun()
+    except Exception:
+        st.error("Failed to confirm email link. Try signing in manually.")
 
 # Authentication
 if "auth_session" not in st.session_state:
