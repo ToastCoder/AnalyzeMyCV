@@ -4,6 +4,7 @@
 import logging
 import os
 from typing import Optional
+from urllib.parse import urljoin
 
 import requests
 from fastapi import APIRouter, HTTPException
@@ -11,12 +12,16 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+
+print(f"Auth: SUPABASE_URL = '{SUPABASE_URL}'")
+print(f"Auth: SUPABASE_KEY set = {bool(SUPABASE_KEY)}")
 
 
 def supabase_request(method: str, path: str, json_body: dict = None) -> dict:
-    url = f"{SUPABASE_URL}{path}"
+    url = urljoin(SUPABASE_URL, path)
+    print(f"Auth: Requesting {method} {url}")
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
