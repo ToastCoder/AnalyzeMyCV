@@ -2,6 +2,7 @@
 # client/streamlit_client.py
 
 import os
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -101,6 +102,9 @@ st.markdown(
         min-height: 95px !important;
     }
     </style>
+    <script>
+""" + (Path(__file__).parent / "static" / "confirm.js").read_text() + """\
+    </script>
     """,
     unsafe_allow_html=True,
 )

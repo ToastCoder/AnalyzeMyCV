@@ -37,6 +37,11 @@ class AuthRequest(BaseModel):
     password: str
 
 
+class ConfirmRequest(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None
+
+
 class AuthResponse(BaseModel):
     success: bool
     user_email: Optional[str] = None
@@ -94,3 +99,29 @@ async def login(body: AuthRequest):
         if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
             status = 401
         raise HTTPException(status_code=status, detail=error_msg)
+
+
+@router.post("/confirm", response_model=AuthResponse)
+async def confirm(body: ConfirmRequest):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Auth confirm failed: Supabase not configured")
+        raise HTTPException(status_code=503, detail="Auth service unavailable.")
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {body.access_token}",
+        }
+        resp = requests.get(
+            urljoin(SUPABASE_URL, "/auth/v1/user"),
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        user = resp.json()
+        user_email = user.get("email", "")
+        print(f"Auth confirm success for: {user_email}")
+        return AuthResponse(success=True, user_email=user_email, access_token=body.access_token)
+    except requests.RequestException as e:
+        error_msg = str(e)
+        print(f"Auth confirm error: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
