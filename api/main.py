@@ -2,19 +2,27 @@
 # api/main.py
 
 import os
+import re
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
 
 # Importing Services And Models
+from api.auth import router as auth_router
 from api.models import AnalysisResponse
 from api.services.llm_analyzer import LLMAnalyzer
 from api.services.pdf_parser import PDFParser
 
 # Initialization
 app = FastAPI(title="AI Resume Analyzer API")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
 # Configuring CORS For Both Local And Production Environments
 app.add_middleware(
@@ -36,7 +44,20 @@ except Exception as e:
     llm_analyzer = None
 
 
+# Utilities
+
+def sanitize_text(text: str) -> str:
+    # Removing Common Binary Markers And Control Characters From Extracted Text
+    text = re.sub(r"<?xpacket[\s\S]*?>", "", text)
+    text = re.sub(
+        r"\r\n[\-\w\d]{10,}", "", text
+    )  # Removing Common Signature Markers
+    return text.strip()
+
+
 # Endpoints
+
+app.include_router(auth_router)
 
 @app.get("/health")
 async def health_check():
@@ -45,7 +66,9 @@ async def health_check():
 
 
 @app.post("/analyze", response_model=AnalysisResponse)
+@limiter.limit("1/5minute")
 async def analyze_document(
+    request: Request,
     file: UploadFile = File(...), 
     job_description: Optional[str] = Form(None)
 ):
@@ -54,16 +77,6 @@ async def analyze_document(
         raise HTTPException(
             status_code=503, detail="Backend services failed to initialize."
         )
-
-    def sanitize_text(text: str) -> str:
-        # Removing Common Binary Markers And Control Characters From Extracted Text
-        import re
-
-        text = re.sub(r"<?xpacket[\s\S]*?>", "", text)
-        text = re.sub(
-            r"\r\n[\-\w\d]{10,}", "", text
-        )  # Removing Common Signature Markers
-        return text.strip()
 
     try:
         # Processing File And Extracting Content

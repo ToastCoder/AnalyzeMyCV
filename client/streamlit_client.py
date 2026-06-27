@@ -19,6 +19,24 @@ def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
     return uploaded_file.read()
 
 
+def auth_request(endpoint: str, email: str, password: str) -> Optional[dict]:
+    try:
+        resp = requests.post(
+            f"{API_URL}/auth/{endpoint}",
+            json={"email": email, "password": password},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        return {"success": False, "message": detail or str(e)}
+
+
 def analyze_document_content(
     file_bytes: bytes, job_description: str = ""
 ) -> Optional[dict]:
@@ -42,7 +60,6 @@ def analyze_document_content(
             f"{API_URL}/analyze",
             files=files,
             data=data,
-            headers={"X-CSRFToken": "dummy"},  # Dummy Header For Stability
         )
 
         response.raise_for_status()  # Raising HTTPError For Bad Status Codes
@@ -67,12 +84,13 @@ st.set_page_config(
     page_title="AnalyzeMyCV", layout="wide", initial_sidebar_state="expanded"
 )
 
-# Injecting Custom CSS To Force SF Mono Font, Reduce Size, And Align Widget Heights
+# Injecting Custom CSS To Force JetBrains Mono Font, Reduce Size, And Align Widget Heights
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
     html, body, p, li, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select {
-        font-family: 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace !important;
+        font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace !important;
     }
     html, body {
         font-size: 14px !important;
@@ -87,20 +105,66 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Authentication
+if "auth_session" not in st.session_state:
+    st.session_state.auth_session = None
+
+if not st.session_state.auth_session:
+    st.title("AnalyzeMyCV")
+    st.markdown("Sign in or create an account to analyze your resume.")
+
+    tab_login, tab_signup = st.tabs(["Sign In", "Sign Up"])
+
+    with tab_login:
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Sign In")
+
+            if submitted:
+                result = auth_request("login", email, password)
+                if result and result.get("success"):
+                    st.session_state.auth_session = result
+                    st.rerun()
+                else:
+                    st.error(result.get("message", "Login failed."))
+
+    with tab_signup:
+        with st.form("signup_form"):
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Password", type="password")
+            new_confirm = st.text_input("Confirm Password", type="password")
+            submitted = st.form_submit_button("Sign Up")
+
+            if submitted:
+                if new_password != new_confirm:
+                    st.error("Passwords do not match.")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    result = auth_request("signup", new_email, new_password)
+                    if result and result.get("success"):
+                        if result.get("access_token"):
+                            st.session_state.auth_session = result
+                            st.rerun()
+                        else:
+                            st.success(result.get("message", "Account created! Check your email to confirm."))
+                    else:
+                        st.error(result.get("message", "Signup failed."))
+
+    st.stop()
+
+user_email = st.session_state.auth_session.get("user_email", "")
+st.sidebar.markdown(f"Signed in as **{user_email}**")
+
 # Main App Layout
 st.title("AnalyzeMyCV")
 st.markdown(
     "Upload a PDF resume to analyze its content structure, skills, and experience using AI."
 )
 
-# Using Columns To Display Inputs Side-by-Side
-col1, col2 = st.columns(2)
-
-with col1:
-    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
-
-with col2:
-    job_description = st.text_area("Optional: Paste a Job Description to match against")
+uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+job_description = st.text_area("Optional: Paste a Job Description to match against")
 
 if uploaded_file:
     # Converting Uploaded File To Bytes For The API Call

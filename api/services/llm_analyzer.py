@@ -81,10 +81,14 @@ class LLMAnalyzer:
                 deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", settings.get("default_model", "gpt-5-mini"))
 
                 system_prompt = base_system_prompt
+
+                safe_resume = extracted_text.replace("{", "{{").replace("}", "}}")
+                safe_jd = job_description.replace("{", "{{").replace("}", "}}") if job_description else ""
+
                 if job_description and match_template:
-                    user_message = match_template.format(job_description=job_description, resume_text=extracted_text)
+                    user_message = match_template.format(job_description=safe_jd, resume_text=safe_resume)
                 else:
-                    user_message = f"Here is the resume text to analyze:\n\n{extracted_text}"
+                    user_message = f"Here is the resume text to analyze:\n\n[RESUME_START]\n{safe_resume}\n[RESUME_END]"
 
                 if deployment_name == "gpt-5-mini":
                     self.logger.info("Using Azure OpenAI Responses API for gpt-5-mini model...")
