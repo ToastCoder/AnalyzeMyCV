@@ -20,7 +20,15 @@ streamlit run client/streamlit_client.py --server.address 0.0.0.0 --server.port 
 STREAMLIT_PID=$!
 echo "Streamlit Frontend started with PID: $STREAMLIT_PID"
 
-sleep 2
+# Wait For Streamlit To Be Ready Before Starting Proxy
+echo "Waiting for Streamlit to be ready..."
+for i in $(seq 1 30); do
+  if curl -s http://127.0.0.1:8001/_stcore/health >/dev/null 2>&1; then
+    echo "Streamlit is ready."
+    break
+  fi
+  sleep 1
+done
 
 # Starting Python Reverse Proxy On Public Port
 echo "Starting reverse proxy on port $PORT..."
