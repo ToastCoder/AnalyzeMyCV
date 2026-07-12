@@ -6,4 +6,5 @@ python-dotenv
 fastapi
 uvicorn[standard]
 requests
+aiohttp
 pydantic
