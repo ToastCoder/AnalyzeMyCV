@@ -49,6 +49,8 @@ class AuthResponse(BaseModel):
     message: Optional[str] = None
 
 
+REDIRECT_TO = os.getenv("REDIRECT_TO", "https://analyzemycv.azurewebsites.net").strip()
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -59,7 +61,7 @@ async def signup(body: AuthRequest):
         raise HTTPException(status_code=503, detail="Auth service unavailable.")
     try:
         print(f"Auth signup attempt for: {body.email}")
-        data = supabase_request("POST", "/auth/v1/signup", {"email": body.email, "password": body.password})
+        data = supabase_request("POST", "/auth/v1/signup?redirect_to=" + REDIRECT_TO, {"email": body.email, "password": body.password})
         access_token = data.get("access_token")
         user_email = data.get("email") or body.email
         print(f"Auth signup success for: {body.email}")
