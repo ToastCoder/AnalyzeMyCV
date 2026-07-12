@@ -38,11 +38,14 @@ async def proxy_websocket(request):
     if request.query_string:
         target += "?" + request.query_string
 
-    ws_server = web.WebSocketResponse(autoping=True)
+    req_protocols = request.headers.get("Sec-WebSocket-Protocol", "")
+    protocols = tuple(p.strip() for p in req_protocols.split(",")) if req_protocols else ()
+
+    ws_server = web.WebSocketResponse(autoping=True, protocols=protocols)
     await ws_server.prepare(request)
 
     async with ClientSession() as session:
-        async with session.ws_connect(target, autoping=True) as ws_client:
+        async with session.ws_connect(target, autoping=True, protocols=protocols) as ws_client:
 
             async def forward(src, dst):
                 try:
