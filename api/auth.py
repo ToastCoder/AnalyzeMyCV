@@ -49,7 +49,7 @@ class AuthResponse(BaseModel):
     message: Optional[str] = None
 
 
-REDIRECT_TO = os.getenv("REDIRECT_TO", "https://analyzemycv.azurewebsites.net").strip()
+REDIRECT_TO = os.getenv("REDIRECT_TO", "https://analyzemycv.azurewebsites.net/auth/callback").strip()
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
