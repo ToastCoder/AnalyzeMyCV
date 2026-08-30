@@ -12,7 +12,7 @@ from api.database import Base
 class User(Base):
     """
     User model for Azure SQL Database.
-    Stores user profile information and metadata.
+    Stores email/password accounts. Passwords are never stored in plaintext.
     """
     __tablename__ = "users"
 
@@ -23,29 +23,26 @@ class User(Base):
         default=lambda: str(uuid.uuid4()),
         nullable=False
     )
-    
-    # User identity from Azure Entra ID (Object ID)
-    entra_id = Column(String(255), unique=True, nullable=False, index=True)
-    
-    # User email
+
+    # User email (lowercase, unique)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    
-    # User display name
+
+    # Hashed password (bcrypt) — plaintext is never stored
+    password_hash = Column(String(255), nullable=True)
+
+    # Optional display name
     display_name = Column(String(255), nullable=True)
-    
-    # Whether the user has confirmed their email
-    email_verified = Column(Boolean, default=True)  # Azure Entra ID handles verification
-    
+
     # Account status
     is_active = Column(Boolean, default=True, index=True)
-    
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime, nullable=True)
-    
+
     def __repr__(self):
-        return f"<User(user_id={self.user_id}, email={self.email}, entra_id={self.entra_id})>"
+        return f"<User(user_id={self.user_id}, email={self.email})>"
 
 
 class AnalysisLog(Base):

@@ -6,7 +6,7 @@ import re
 import time
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -14,7 +14,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 
 # Importing Services And Models
-from api.auth import router as auth_router
+from api.auth import get_current_user, router as auth_router
+from api.user_models import User
 from api.models import AnalysisResponse
 from api.services.llm_analyzer import LLMAnalyzer
 from api.services.pdf_parser import PDFParser
@@ -34,13 +35,16 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
-# Configuring CORS For Both Local And Production Environments
+# CORS is restricted by default. Set CORS_ORIGINS to a comma-separated list
+# when a browser-based client is hosted on a different origin.
+configured_origins = os.getenv("CORS_ORIGINS", "http://localhost:8000,http://localhost:8501")
+cors_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allowing All Origins For Azure Web App Compatibility
+    allow_origins=cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Dependencies
@@ -80,7 +84,8 @@ async def health_check():
 async def analyze_document(
     request: Request,
     file: UploadFile = File(...), 
-    job_description: Optional[str] = Form(None)
+    job_description: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
 ):
     # Handling The Full Pipeline: PDF Parsing -> Content Extraction -> LLM Analysis
     if pdf_parser is None or llm_analyzer is None:
@@ -138,10 +143,9 @@ async def analyze_document(
         print(f"[Pipeline] ERROR: {type(e).__name__}: {e}")
         
         # Converting Exception Object To Safe String Representation For JSON
-        error_detail = str(e)
         raise HTTPException(
             status_code=500,
-            detail=f"Internal Server Error during analysis: {error_detail}",
+            detail="Internal Server Error during analysis.",
         )
 
 

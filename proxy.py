@@ -6,33 +6,6 @@ from aiohttp import web, ClientSession, WSMsgType
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8001"))
 PROXY_PORT = int(os.getenv("PROXY_PORT", "8000"))
 
-CALLBACK_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Confirming account...</title></head>
-<body>
-<p>Confirming your account, please wait...</p>
-<script>
-(function () {
-  var hash = window.location.hash;
-  if (hash && hash.indexOf("access_token=") !== -1) {
-    var params = new URLSearchParams(hash.replace("#", "?"));
-    var token = params.get("access_token");
-    if (token) {
-      window.location.href = "/?confirm_token=" + encodeURIComponent(token);
-      return;
-    }
-  }
-  window.location.href = "/";
-})();
-</script>
-</body>
-</html>"""
-
-
-async def handle_callback(request):
-    return web.Response(text=CALLBACK_HTML, content_type="text/html")
-
-
 async def proxy_websocket(request):
     target = f"http://127.0.0.1:{STREAMLIT_PORT}{request.path}"
     if request.query_string:
@@ -93,7 +66,6 @@ async def handle_catchall(request):
 
 
 app = web.Application()
-app.router.add_get("/auth/callback", handle_callback)
 app.router.add_route("*", "/{path_info:.*}", handle_catchall)
 
 if __name__ == "__main__":

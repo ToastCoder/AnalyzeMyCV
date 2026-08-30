@@ -1,24 +1,18 @@
 # AnalyzeMyCV
 # client/streamlit_client.py
-# Azure Entra ID OAuth2 Authentication
+# Email/password authentication
 
 import os
-from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuration
 API_URL = os.getenv("API_URL", "http://localhost:8080")
-AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "").strip()
-AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "").strip()
-AZURE_AUTH_REDIRECT_URI = os.getenv("AZURE_AUTH_REDIRECT_URI", "").strip()
-
-# Azure Entra ID Endpoints
-AUTHORITY = f"https://login.microsoftonline.com/{AZURE_TENANT_ID}"
-AUTHORIZE_ENDPOINT = f"{AUTHORITY}/oauth2/v2.0/authorize"
 
 
 def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
@@ -28,24 +22,12 @@ def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
     return uploaded_file.read()
 
 
-def get_azure_login_url() -> str:
-    """Generate Azure Entra ID login URL."""
-    params = {
-        "client_id": AZURE_CLIENT_ID,
-        "response_type": "code",
-        "scope": "openid profile email offline_access",
-        "redirect_uri": AZURE_AUTH_REDIRECT_URI,
-        "response_mode": "query",
-    }
-    return f"{AUTHORIZE_ENDPOINT}?{urlencode(params)}"
-
-
-def exchange_code_for_token(code: str) -> Optional[dict]:
-    """Exchange authorization code for access token via backend."""
+def authenticate(endpoint: str, email: str, password: str) -> dict:
+    """Sign up or log in through the FastAPI auth endpoint."""
     try:
         resp = requests.post(
-            f"{API_URL}/auth/login",
-            json={"code": code},
+            f"{API_URL}/auth/{endpoint}",
+            json={"email": email, "password": password},
             timeout=15,
         )
         resp.raise_for_status()
@@ -153,50 +135,20 @@ if "auth_session" not in st.session_state:
     st.session_state.auth_session = None
 
 
-# Handle OAuth2 callback from Azure Entra ID
-query_params = st.query_params
-if "code" in query_params:
-    auth_code = query_params["code"]
-    
-    # Clear the code from query params
-    try:
-        del st.query_params["code"]
-    except Exception:
-        pass
-    
-    # Exchange code for token
-    result = exchange_code_for_token(auth_code)
-    
-    if result and result.get("success"):
-        st.session_state.auth_session = result
-        st.success("Login successful!")
-        st.rerun()
-    else:
-        st.error(f"Login failed: {result.get('message', 'Unknown error')}")
-
-
 # Check if user is authenticated
 if not st.session_state.auth_session:
-    # Not authenticated - show login page
     st.title("AnalyzeMyCV")
-    st.markdown("Sign in with your Azure account to analyze your resume.")
-    
-    st.info(
-        "Click the button below to authenticate with your Azure Entra ID account. "
-        "You'll be redirected to Microsoft's login page."
-    )
-    
-    # Generate login URL
-    login_url = get_azure_login_url()
-    
-    # Create a link to Azure login
-    st.markdown(f"[🔐 Sign In with Azure](${{{login_url}}})".replace("${{", "[").replace("}}", "]"))
-    
-    # Alternative: Show direct link if above doesn't work
-    with st.expander("Or click here if the button above doesn't work"):
-        st.markdown(f"[Sign In with Azure]({login_url})")
-        st.code(login_url)
-    
+    st.markdown("Sign in with your email and password.")
+    mode = st.radio("Account", ["Log in", "Create account"], horizontal=True)
+    email = st.text_input("Email", autocomplete="email")
+    password = st.text_input("Password", type="password", autocomplete="current-password")
+    if st.button(mode):
+        endpoint = "login" if mode == "Log in" else "signup"
+        result = authenticate(endpoint, email, password)
+        if result.get("success"):
+            st.session_state.auth_session = result
+            st.rerun()
+        st.error(result.get("message", "Authentication failed."))
     st.stop()
 
 
