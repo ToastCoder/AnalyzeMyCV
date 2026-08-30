@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import time
 from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -76,8 +77,6 @@ class LLMAnalyzer:
             match_template = prompts.get("match_report_template", "")
 
             if isinstance(self.client, AzureOpenAI):
-                self.logger.info("Executing Azure OpenAI analysis call...")
-                # Use gpt-5-mini as default fallback since it is the only configured deployment
                 deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", settings.get("default_model", "gpt-5-mini"))
 
                 system_prompt = base_system_prompt
@@ -89,6 +88,24 @@ class LLMAnalyzer:
                     user_message = match_template.format(job_description=safe_jd, resume_text=safe_resume)
                 else:
                     user_message = f"Here is the resume text to analyze:\n\n[RESUME_START]\n{safe_resume}\n[RESUME_END]"
+
+                # Logging the full input payload sent to the model
+                self.logger.info("=" * 60)
+                self.logger.info("LLM INPUT")
+                self.logger.info("=" * 60)
+                self.logger.info(f"Model: {deployment_name}")
+                self.logger.info(f"Has Job Description: {bool(job_description)}")
+                self.logger.info(f"Resume Text Length: {len(extracted_text)} chars")
+                if job_description:
+                    self.logger.info(f"Job Description Length: {len(job_description)} chars")
+                self.logger.info(f"User Message Length: {len(user_message)} chars")
+                self.logger.info("-" * 40)
+                self.logger.info(f"SYSTEM PROMPT:\n{system_prompt}")
+                self.logger.info("-" * 40)
+                self.logger.info(f"USER MESSAGE:\n{user_message[:2000]}{'... [truncated]' if len(user_message) > 2000 else ''}")
+                self.logger.info("=" * 60)
+
+                start_time = time.time()
 
                 if deployment_name == "gpt-5-mini":
                     self.logger.info("Using Azure OpenAI Responses API for gpt-5-mini model...")
@@ -121,12 +138,26 @@ class LLMAnalyzer:
                     )
                     report = response.choices[0].message.content
 
+                elapsed = time.time() - start_time
+
+                # Logging the full output received from the model
+                self.logger.info("=" * 60)
+                self.logger.info("LLM OUTPUT")
+                self.logger.info("=" * 60)
+                self.logger.info(f"Response Time: {elapsed:.2f}s")
+                self.logger.info(f"Report Length: {len(report)} chars")
+                self.logger.info("-" * 40)
+                self.logger.info(f"REPORT:\n{report[:3000]}{'... [truncated]' if len(report) > 3000 else ''}")
+                self.logger.info("=" * 60)
+
                 metadata = {
                     "llm_provider": "AzureOpenAI",
                     "model_used": deployment_name,
                     "prompt_size": len(extracted_text)
                     + (len(job_description) if job_description else 0),
                     "has_job_description": bool(job_description),
+                    "response_time_s": round(elapsed, 2),
+                    "report_length": len(report),
                 }
                 return report, metadata
 

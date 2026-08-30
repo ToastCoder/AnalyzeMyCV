@@ -1,17 +1,24 @@
 # AnalyzeMyCV
 # client/streamlit_client.py
+# Azure Entra ID OAuth2 Authentication
 
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 # Configuration
-# Pointing to the internal FastAPI server which runs on port 8080 inside Docker
 API_URL = os.getenv("API_URL", "http://localhost:8080")
+AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "").strip()
+AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "").strip()
+AZURE_AUTH_REDIRECT_URI = os.getenv("AZURE_AUTH_REDIRECT_URI", "").strip()
+
+# Azure Entra ID Endpoints
+AUTHORITY = f"https://login.microsoftonline.com/{AZURE_TENANT_ID}"
+AUTHORIZE_ENDPOINT = f"{AUTHORITY}/oauth2/v2.0/authorize"
 
 
 def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
@@ -21,11 +28,43 @@ def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
     return uploaded_file.read()
 
 
-def auth_request(endpoint: str, email: str, password: str) -> Optional[dict]:
+def get_azure_login_url() -> str:
+    """Generate Azure Entra ID login URL."""
+    params = {
+        "client_id": AZURE_CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid profile email offline_access",
+        "redirect_uri": AZURE_AUTH_REDIRECT_URI,
+        "response_mode": "query",
+    }
+    return f"{AUTHORIZE_ENDPOINT}?{urlencode(params)}"
+
+
+def exchange_code_for_token(code: str) -> Optional[dict]:
+    """Exchange authorization code for access token via backend."""
     try:
         resp = requests.post(
-            f"{API_URL}/auth/{endpoint}",
-            json={"email": email, "password": password},
+            f"{API_URL}/auth/login",
+            json={"code": code},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        return {"success": False, "message": detail or str(e)}
+
+
+def verify_token(access_token: str) -> Optional[dict]:
+    """Verify access token with backend."""
+    try:
+        resp = requests.post(
+            f"{API_URL}/auth/verify",
+            json={"access_token": access_token},
             timeout=15,
         )
         resp.raise_for_status()
@@ -40,31 +79,33 @@ def auth_request(endpoint: str, email: str, password: str) -> Optional[dict]:
 
 
 def analyze_document_content(
-    file_bytes: bytes, job_description: str = ""
+    file_bytes: bytes, job_description: str = "", access_token: str = ""
 ) -> Optional[dict]:
     # Sending The PDF File Bytes To The FastAPI Backend For Analysis
     if file_bytes is None:
         return {"status": "error", "message": "No file provided."}
 
-    # Preparing The File Payload For The API Call
-    files = {"file": (None, "uploaded_document.pdf", "application/pdf")}
-
     try:
-        # Simulating The File Structure The Backend Expects
+        # Preparing The File Payload For The API Call
         files = {"file": ("uploaded_document.pdf", file_bytes, "application/pdf")}
-
-        # Making The POST Request
         data = {}
         if job_description:
             data["job_description"] = job_description
 
+        # Adding Authorization Header
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        # Making The POST Request
         response = requests.post(
             f"{API_URL}/analyze",
             files=files,
             data=data,
+            headers=headers,
         )
 
-        response.raise_for_status()  # Raising HTTPError For Bad Status Codes
+        response.raise_for_status()
         return response.json()
 
     except requests.exceptions.ConnectionError:
@@ -107,85 +148,72 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Inject magic link handler (runs in iframe, accesses parent location)
-components.html(
-    "<script>" + (Path(__file__).parent / "static" / "confirm.js").read_text() + "</script>",
-    height=0,
-    width=0,
-)
-
-# Handle confirmation token from magic link
-confirm_token = st.query_params.get("confirm_token")
-if confirm_token:
-    try:
-        del st.query_params["confirm_token"]
-    except Exception:
-        pass
-    try:
-        resp = requests.post(
-            f"{API_URL}/auth/confirm",
-            json={"access_token": confirm_token},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("success"):
-            st.session_state.auth_session = result
-            st.rerun()
-    except Exception:
-        st.error("Failed to confirm email link. Try signing in manually.")
-
-# Authentication
+# Initialize session state
 if "auth_session" not in st.session_state:
     st.session_state.auth_session = None
 
+
+# Handle OAuth2 callback from Azure Entra ID
+query_params = st.query_params
+if "code" in query_params:
+    auth_code = query_params["code"]
+    
+    # Clear the code from query params
+    try:
+        del st.query_params["code"]
+    except Exception:
+        pass
+    
+    # Exchange code for token
+    result = exchange_code_for_token(auth_code)
+    
+    if result and result.get("success"):
+        st.session_state.auth_session = result
+        st.success("Login successful!")
+        st.rerun()
+    else:
+        st.error(f"Login failed: {result.get('message', 'Unknown error')}")
+
+
+# Check if user is authenticated
 if not st.session_state.auth_session:
+    # Not authenticated - show login page
     st.title("AnalyzeMyCV")
-    st.markdown("Sign in or create an account to analyze your resume.")
-
-    tab_login, tab_signup = st.tabs(["Sign In", "Sign Up"])
-
-    with tab_login:
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Sign In")
-
-            if submitted:
-                result = auth_request("login", email, password)
-                if result and result.get("success"):
-                    st.session_state.auth_session = result
-                    st.rerun()
-                else:
-                    st.error(result.get("message", "Login failed."))
-
-    with tab_signup:
-        with st.form("signup_form"):
-            new_email = st.text_input("Email")
-            new_password = st.text_input("Password", type="password")
-            new_confirm = st.text_input("Confirm Password", type="password")
-            submitted = st.form_submit_button("Sign Up")
-
-            if submitted:
-                if new_password != new_confirm:
-                    st.error("Passwords do not match.")
-                elif len(new_password) < 6:
-                    st.error("Password must be at least 6 characters.")
-                else:
-                    result = auth_request("signup", new_email, new_password)
-                    if result and result.get("success"):
-                        if result.get("access_token"):
-                            st.session_state.auth_session = result
-                            st.rerun()
-                        else:
-                            st.success(result.get("message", "Account created! Check your email to confirm."))
-                    else:
-                        st.error(result.get("message", "Signup failed."))
-
+    st.markdown("Sign in with your Azure account to analyze your resume.")
+    
+    st.info(
+        "Click the button below to authenticate with your Azure Entra ID account. "
+        "You'll be redirected to Microsoft's login page."
+    )
+    
+    # Generate login URL
+    login_url = get_azure_login_url()
+    
+    # Create a link to Azure login
+    st.markdown(f"[🔐 Sign In with Azure](${{{login_url}}})".replace("${{", "[").replace("}}", "]"))
+    
+    # Alternative: Show direct link if above doesn't work
+    with st.expander("Or click here if the button above doesn't work"):
+        st.markdown(f"[Sign In with Azure]({login_url})")
+        st.code(login_url)
+    
     st.stop()
 
-user_email = st.session_state.auth_session.get("user_email", "")
-st.sidebar.markdown(f"Signed in as **{user_email}**")
+
+# User is authenticated - show main app
+user_email = st.session_state.auth_session.get("user_email", "Unknown")
+user_name = st.session_state.auth_session.get("display_name", user_email)
+access_token = st.session_state.auth_session.get("access_token", "")
+
+st.sidebar.markdown(f"**Signed in as**")
+st.sidebar.markdown(f"`{user_name}`")
+st.sidebar.markdown(f"`{user_email}`")
+
+# Logout button
+if st.sidebar.button("Sign Out"):
+    st.session_state.auth_session = None
+    st.query_params.clear()
+    st.rerun()
 
 # Main App Layout
 st.title("AnalyzeMyCV")
@@ -206,8 +234,10 @@ if uploaded_file:
     if st.button("Analyze Document"):
         if file_bytes:
             with st.spinner("Analyzing resume content... This may take a minute."):
-                # Calling The Backend API
-                analysis_result = analyze_document_content(file_bytes, job_description)
+                # Calling The Backend API with authorization
+                analysis_result = analyze_document_content(
+                    file_bytes, job_description, access_token
+                )
 
             st.success("Analysis Complete!")
 

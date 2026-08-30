@@ -3,6 +3,7 @@
 
 import os
 import re
+import time
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -17,9 +18,17 @@ from api.auth import router as auth_router
 from api.models import AnalysisResponse
 from api.services.llm_analyzer import LLMAnalyzer
 from api.services.pdf_parser import PDFParser
+from api.database import init_db
 
 # Initialization
 app = FastAPI(title="AI Resume Analyzer API")
+
+# Initialize database tables
+try:
+    init_db()
+    print("[Database] Tables initialized successfully")
+except Exception as e:
+    print(f"[Database] Warning: Could not initialize database tables: {e}")
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -81,9 +90,14 @@ async def analyze_document(
 
     try:
         # Processing File And Extracting Content
-        print(f"Starting PDF parsing for file: {file.filename}...")
         file_bytes = await file.read()
+        file_size_kb = len(file_bytes) / 1024
+        print(f"[Pipeline] File received: {file.filename} ({file_size_kb:.1f} KB)")
+
+        start_time = time.time()
         extracted_text = pdf_parser.parse_pdf(file_bytes)
+        parse_time = time.time() - start_time
+        print(f"[Pipeline] PDF parsed in {parse_time:.2f}s — extracted {len(extracted_text)} chars")
 
         # Sanitizing Extracted Text Before Passing It Downstream
         sanitized_text = sanitize_text(extracted_text)
@@ -93,14 +107,23 @@ async def analyze_document(
                 "Could not extract any usable text from the provided PDF file."
             )
 
+        print(f"[Pipeline] Text sanitized — {len(sanitized_text)} chars ready for LLM")
+        if job_description:
+            print(f"[Pipeline] Job Description provided — {len(job_description)} chars")
+
         # Analyzing Content With LLM
-        print("Starting LLM analysis...")
+        llm_start = time.time()
         report, metadata = llm_analyzer.analyze_resume_content(sanitized_text, job_description)
+        llm_time = time.time() - llm_start
+
+        total_time = time.time() - start_time
+        print(f"[Pipeline] Analysis complete in {total_time:.2f}s (PDF: {parse_time:.2f}s, LLM: {llm_time:.2f}s)")
+        print(f"[Pipeline] Report generated: {len(report)} chars")
 
         # Constructing Response
         return AnalysisResponse(
             report=report,
-            metadata={"parser_status": "success", "llm_status": "success"},
+            metadata={"parser_status": "success", "llm_status": "success", "total_time_s": round(total_time, 2)},
         )
 
     except ValueError as e:
@@ -112,7 +135,7 @@ async def analyze_document(
         )
     except Exception as e:
         # Handling General Unexpected Errors
-        print(f"An unexpected error occurred during analysis: {e}")
+        print(f"[Pipeline] ERROR: {type(e).__name__}: {e}")
         
         # Converting Exception Object To Safe String Representation For JSON
         error_detail = str(e)
