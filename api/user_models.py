@@ -18,7 +18,7 @@ class User(Base):
 
     # Primary key
     user_id = Column(
-        UNIQUEIDENTIFIER(binary=False),
+        UNIQUEIDENTIFIER(),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
         nullable=False
@@ -53,7 +53,7 @@ class AnalysisLog(Base):
 
     # Primary key
     log_id = Column(
-        UNIQUEIDENTIFIER(binary=False),
+        UNIQUEIDENTIFIER(),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
         nullable=False
@@ -61,7 +61,7 @@ class AnalysisLog(Base):
     
     # Reference to user
     user_id = Column(
-        UNIQUEIDENTIFIER(binary=False),
+        UNIQUEIDENTIFIER(),
         nullable=False,
         index=True
     )
