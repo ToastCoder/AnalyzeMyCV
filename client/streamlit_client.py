@@ -266,9 +266,16 @@ if uploaded_file:
                 report = analysis_result.get("report")
 
                 st.subheader("Full Analysis Report")
+                score_col1, score_col2, score_col3 = st.columns(3)
+                resume_score = analysis_result.get("metadata", {}).get("resume_score")
                 ats_score = analysis_result.get("metadata", {}).get("ats_friendliness_score")
+                match_score = analysis_result.get("metadata", {}).get("match_score")
+                if resume_score is not None:
+                    score_col1.metric("Resume Score", f"{resume_score}/100")
                 if ats_score is not None:
-                    st.metric("ATS Friendliness Score", f"{ats_score}/100")
+                    score_col2.metric("ATS Friendliness", f"{ats_score}/100")
+                if match_score is not None:
+                    score_col3.metric("Job Match", f"{match_score}/100")
                 st.markdown(report)
             else:
                 # Handling Errors From The API Or Connection Issues
