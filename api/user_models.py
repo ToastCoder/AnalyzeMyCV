@@ -80,3 +80,27 @@ class AnalysisLog(Base):
     
     def __repr__(self):
         return f"<AnalysisLog(log_id={self.log_id}, user_id={self.user_id})>"
+
+
+class PasswordResetToken(Base):
+    """One-time, short-lived password reset tokens.
+
+    Only a SHA-256 hash is stored. The raw token is sent to the user and is
+    never persisted in the database.
+    """
+    __tablename__ = "password_reset_tokens"
+
+    token_id = Column(
+        UNIQUEIDENTIFIER(),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        nullable=False,
+    )
+    user_id = Column(UNIQUEIDENTIFIER(), nullable=False, index=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<PasswordResetToken(token_id={self.token_id}, user_id={self.user_id})>"

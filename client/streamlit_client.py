@@ -41,6 +41,40 @@ def authenticate(endpoint: str, email: str, password: str) -> dict:
         return {"success": False, "message": detail or str(e)}
 
 
+def request_password_reset(email: str) -> dict:
+    try:
+        resp = requests.post(
+            f"{API_URL}/auth/forgot-password", json={"email": email}, timeout=15
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        return {"success": False, "message": detail or str(e)}
+
+
+def reset_password(token: str, new_password: str) -> dict:
+    try:
+        resp = requests.post(
+            f"{API_URL}/auth/reset-password",
+            json={"token": token, "new_password": new_password},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        return {"success": False, "message": detail or str(e)}
+
+
 def verify_token(access_token: str) -> Optional[dict]:
     """Verify access token with backend."""
     try:
@@ -137,6 +171,25 @@ if "auth_session" not in st.session_state:
 
 # Check if user is authenticated
 if not st.session_state.auth_session:
+    reset_token = st.query_params.get("reset_token")
+    if reset_token:
+        st.title("Reset your password")
+        new_password = st.text_input("New password", type="password")
+        confirm_password = st.text_input("Confirm new password", type="password")
+        if st.button("Reset password"):
+            if new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif len(new_password) < 8:
+                st.error("Password must be at least 8 characters.")
+            else:
+                result = reset_password(reset_token, new_password)
+                if result.get("success"):
+                    st.query_params.clear()
+                    st.success("Password reset successfully. You can now log in.")
+                else:
+                    st.error(result.get("message", "Password reset failed."))
+        st.stop()
+
     st.title("AnalyzeMyCV")
     st.markdown("Sign in with your email and password.")
     mode = st.radio("Account", ["Log in", "Create account"], horizontal=True)
@@ -149,6 +202,22 @@ if not st.session_state.auth_session:
             st.session_state.auth_session = result
             st.rerun()
         st.error(result.get("message", "Authentication failed."))
+    if mode == "Log in" and st.button("Forgot password?"):
+        st.session_state.show_forgot_password = True
+        st.rerun()
+    if st.session_state.get("show_forgot_password"):
+        st.divider()
+        st.subheader("Reset your password")
+        reset_email = st.text_input("Account email", key="reset_email")
+        if st.button("Send reset link"):
+            result = request_password_reset(reset_email)
+            if result.get("success"):
+                st.success(result.get("message"))
+            else:
+                st.error(result.get("message", "Could not request a reset link."))
+        if st.button("Back to login"):
+            st.session_state.show_forgot_password = False
+            st.rerun()
     st.stop()
 
 
@@ -197,6 +266,9 @@ if uploaded_file:
                 report = analysis_result.get("report")
 
                 st.subheader("Full Analysis Report")
+                ats_score = analysis_result.get("metadata", {}).get("ats_friendliness_score")
+                if ats_score is not None:
+                    st.metric("ATS Friendliness Score", f"{ats_score}/100")
                 st.markdown(report)
             else:
                 # Handling Errors From The API Or Connection Issues
