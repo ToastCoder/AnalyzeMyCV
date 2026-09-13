@@ -5,6 +5,8 @@ import hashlib
 import os
 import re
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import quote
@@ -33,6 +35,29 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 auth_limiter = Limiter(key_func=get_remote_address)
+
+# The IP-based limiter above is largely decorative in this deployment: the
+# Streamlit frontend calls this API server-side, so every browser session
+# reaches FastAPI as the same loopback address, putting all users in one
+# shared bucket. This per-email limiter (kept in-process, per worker — good
+# enough at this app's scale) ensures one targeted email's attempts can't
+# lock everyone else out of login/signup/reset.
+_RATE_LOCK = threading.Lock()
+_RATE_BUCKETS: dict[tuple[str, str], list] = {}
+_RATE_MAX_TRACKED_KEYS = 5000
+
+
+def _check_email_rate_limit(bucket: str, email: str, max_attempts: int, window_seconds: float) -> None:
+    key = (bucket, email)
+    now = time.monotonic()
+    with _RATE_LOCK:
+        if len(_RATE_BUCKETS) > _RATE_MAX_TRACKED_KEYS:
+            _RATE_BUCKETS.clear()
+        history = [t for t in _RATE_BUCKETS.get(key, ()) if now - t < window_seconds]
+        if len(history) >= max_attempts:
+            raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
+        history.append(now)
+        _RATE_BUCKETS[key] = history
 
 
 class AuthRequest(BaseModel):
@@ -131,10 +156,10 @@ def auth_response(user: User, message: Optional[str] = None) -> AuthResponse:
 
 
 @router.post("/signup", response_model=AuthResponse)
-@auth_limiter.limit("5/minute")
 async def signup(request: Request, body: AuthRequest, db: Session = Depends(get_db)):
     require_jwt_secret()
     email = normalize_email(body.email)
+    _check_email_rate_limit("signup", email, max_attempts=5, window_seconds=60)
     if len(body.password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
     if get_user_by_email(db, email):
@@ -152,10 +177,10 @@ async def signup(request: Request, body: AuthRequest, db: Session = Depends(get_
 
 
 @router.post("/login", response_model=AuthResponse)
-@auth_limiter.limit("10/minute")
 async def login(request: Request, body: AuthRequest, db: Session = Depends(get_db)):
     require_jwt_secret()
     email = normalize_email(body.email)
+    _check_email_rate_limit("login", email, max_attempts=10, window_seconds=60)
     user = get_user_by_email(db, email)
     if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -167,12 +192,12 @@ async def login(request: Request, body: AuthRequest, db: Session = Depends(get_d
 
 
 @router.post("/forgot-password", response_model=AuthResponse)
-@auth_limiter.limit("3/15minutes")
 async def forgot_password(
     request: Request, body: ForgotPasswordRequest, db: Session = Depends(get_db)
 ):
     """Issue a generic response so account existence cannot be enumerated."""
     email = normalize_email(body.email)
+    _check_email_rate_limit("forgot_password", email, max_attempts=3, window_seconds=900)
     user = get_user_by_email(db, email)
     if user and user.is_active and user.password_hash:
         raw_token = secrets.token_urlsafe(48)

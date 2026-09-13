@@ -22,14 +22,10 @@ def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
     return uploaded_file.read()
 
 
-def authenticate(endpoint: str, email: str, password: str) -> dict:
-    """Sign up or log in through the FastAPI auth endpoint."""
+def _post_auth(path: str, payload: dict) -> dict:
+    """POST to an auth endpoint, normalizing errors to the same {success, message} shape."""
     try:
-        resp = requests.post(
-            f"{API_URL}/auth/{endpoint}",
-            json={"email": email, "password": password},
-            timeout=15,
-        )
+        resp = requests.post(f"{API_URL}/auth/{path}", json=payload, timeout=15)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.RequestException as e:
@@ -39,59 +35,19 @@ def authenticate(endpoint: str, email: str, password: str) -> dict:
         except Exception:
             pass
         return {"success": False, "message": detail or str(e)}
+
+
+def authenticate(endpoint: str, email: str, password: str) -> dict:
+    """Sign up or log in through the FastAPI auth endpoint."""
+    return _post_auth(endpoint, {"email": email, "password": password})
 
 
 def request_password_reset(email: str) -> dict:
-    try:
-        resp = requests.post(
-            f"{API_URL}/auth/forgot-password", json={"email": email}, timeout=15
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        detail = None
-        try:
-            detail = e.response.json().get("detail")
-        except Exception:
-            pass
-        return {"success": False, "message": detail or str(e)}
+    return _post_auth("forgot-password", {"email": email})
 
 
 def reset_password(token: str, new_password: str) -> dict:
-    try:
-        resp = requests.post(
-            f"{API_URL}/auth/reset-password",
-            json={"token": token, "new_password": new_password},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        detail = None
-        try:
-            detail = e.response.json().get("detail")
-        except Exception:
-            pass
-        return {"success": False, "message": detail or str(e)}
-
-
-def verify_token(access_token: str) -> Optional[dict]:
-    """Verify access token with backend."""
-    try:
-        resp = requests.post(
-            f"{API_URL}/auth/verify",
-            json={"access_token": access_token},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        detail = None
-        try:
-            detail = e.response.json().get("detail")
-        except Exception:
-            pass
-        return {"success": False, "message": detail or str(e)}
+    return _post_auth("reset-password", {"token": token, "new_password": new_password})
 
 
 def analyze_document_content(

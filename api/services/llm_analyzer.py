@@ -149,6 +149,22 @@ class LLMAnalyzer:
             return report, score
         return f"### Resume Score: {score}/100\n\n{report}", score
 
+    def _mock_result(
+        self, provider: str, model: str, mock_report: str,
+        extracted_text: str, job_description: Optional[str],
+    ) -> Tuple[str, dict]:
+        """Shared scoring + metadata assembly for every mock (no-credentials) code path."""
+        mock_report, resume_score = self._ensure_resume_score(mock_report, extracted_text)
+        mock_report, ats_score = self._ensure_ats_score(mock_report, extracted_text, job_description)
+        return mock_report, {
+            "llm_provider": provider,
+            "model_used": model,
+            "prompt_size": len(extracted_text),
+            "has_job_description": bool(job_description),
+            "ats_friendliness_score": ats_score,
+            "resume_score": resume_score,
+        }
+
     def analyze_resume_content(
         self, extracted_text: str, job_description: Optional[str] = None
     ) -> Tuple[Optional[str], dict]:
@@ -286,16 +302,7 @@ class LLMAnalyzer:
                     mock_report += (
                         "\n\n**Job Match:** The resume aligns well with the target role."
                     )
-                mock_report, resume_score = self._ensure_resume_score(mock_report, extracted_text)
-                mock_report, ats_score = self._ensure_ats_score(mock_report, extracted_text, job_description)
-                return mock_report, {
-                    "llm_provider": "AzureOpenAI-Mock",
-                    "model_used": "gpt-4-mock",
-                    "prompt_size": len(extracted_text),
-                    "has_job_description": bool(job_description),
-                    "ats_friendliness_score": ats_score,
-                    "resume_score": resume_score,
-                }
+                return self._mock_result("AzureOpenAI-Mock", "gpt-4-mock", mock_report, extracted_text, job_description)
 
             elif self.client == "OLLAMA_CLIENT_MOCK":
                 self.logger.info("Executing Ollama analysis call...")
@@ -305,16 +312,7 @@ class LLMAnalyzer:
                 )
                 if job_description:
                     mock_report += "\n\n**Job Match:** Insights generated based on the provided job description."
-                mock_report, resume_score = self._ensure_resume_score(mock_report, extracted_text)
-                mock_report, ats_score = self._ensure_ats_score(mock_report, extracted_text, job_description)
-                return mock_report, {
-                    "llm_provider": "Ollama",
-                    "model_used": "llama3",
-                    "prompt_size": len(extracted_text),
-                    "has_job_description": bool(job_description),
-                    "ats_friendliness_score": ats_score,
-                    "resume_score": resume_score,
-                }
+                return self._mock_result("Ollama", "llama3", mock_report, extracted_text, job_description)
 
             else:
                 if job_description:
@@ -332,16 +330,7 @@ class LLMAnalyzer:
                         "The content was sufficiently rich for analysis. "
                         "The document structure suggests a strong academic background with measurable project experience."
                     )
-                mock_report, resume_score = self._ensure_resume_score(mock_report, extracted_text)
-                mock_report, ats_score = self._ensure_ats_score(mock_report, extracted_text, job_description)
-                return mock_report, {
-                    "llm_provider": "Mock",
-                    "model_used": "gpt-4o-mock",
-                    "prompt_size": len(extracted_text),
-                    "has_job_description": bool(job_description),
-                    "ats_friendliness_score": ats_score,
-                    "resume_score": resume_score,
-                }
+                return self._mock_result("Mock", "gpt-4o-mock", mock_report, extracted_text, job_description)
 
         except Exception as e:
             self.logger.error(f"Error during LLM analysis: {e}")

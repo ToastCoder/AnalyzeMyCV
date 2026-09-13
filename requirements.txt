@@ -15,4 +15,3 @@ azure-communication-email>=1.0.0
 # Database (Azure SQL)
 sqlalchemy>=2.0.0
 pyodbc>=5.0.0
-alembic>=1.12.0

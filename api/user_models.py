@@ -17,8 +17,13 @@ class User(Base):
     __tablename__ = "users"
 
     # Primary key
+    # as_uuid=False: values are stored/round-tripped as plain strings, matching
+    # the str(uuid.uuid4()) default and every str(user.user_id)/JWT "sub" use
+    # site elsewhere. SQLAlchemy 2.0's UNIQUEIDENTIFIER defaults to as_uuid=True
+    # (real uuid.UUID objects), which raises AttributeError on insert here since
+    # MSSQL's dialect uses the same string-based bind path as SQLite does.
     user_id = Column(
-        UNIQUEIDENTIFIER(),
+        UNIQUEIDENTIFIER(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
         nullable=False
@@ -45,43 +50,6 @@ class User(Base):
         return f"<User(user_id={self.user_id}, email={self.email})>"
 
 
-class AnalysisLog(Base):
-    """
-    Log of analyses performed by users for auditing and usage tracking.
-    """
-    __tablename__ = "analysis_logs"
-
-    # Primary key
-    log_id = Column(
-        UNIQUEIDENTIFIER(),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        nullable=False
-    )
-    
-    # Reference to user
-    user_id = Column(
-        UNIQUEIDENTIFIER(),
-        nullable=False,
-        index=True
-    )
-    
-    # File name analyzed
-    file_name = Column(String(255), nullable=True)
-    
-    # Whether job description was provided
-    has_job_description = Column(Boolean, default=False)
-    
-    # Analysis result summary (can store JSON)
-    result_summary = Column(String(2000), nullable=True)
-    
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    
-    def __repr__(self):
-        return f"<AnalysisLog(log_id={self.log_id}, user_id={self.user_id})>"
-
-
 class PasswordResetToken(Base):
     """One-time, short-lived password reset tokens.
 
@@ -91,12 +59,12 @@ class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
 
     token_id = Column(
-        UNIQUEIDENTIFIER(),
+        UNIQUEIDENTIFIER(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
         nullable=False,
     )
-    user_id = Column(UNIQUEIDENTIFIER(), nullable=False, index=True)
+    user_id = Column(UNIQUEIDENTIFIER(as_uuid=False), nullable=False, index=True)
     token_hash = Column(String(64), unique=True, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     used_at = Column(DateTime, nullable=True)
