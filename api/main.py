@@ -6,7 +6,7 @@ import time
 from typing import Optional
 
 import jwt
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -31,7 +31,7 @@ try:
 except Exception as e:
     print(f"[Database] Warning: Could not initialize database tables: {e}")
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_remote_address, headers_enabled=True)
 app.state.limiter = limiter
 # Scoped to slowapi's own exception type (not the raw 429 status code): a status-code
 # registration would intercept ANY HTTPException(429, ...) — including the plain,
@@ -95,10 +95,23 @@ async def health_check():
     return {"status": "ok", "service": "AI Resume Analyzer API"}
 
 
+def _read_and_parse_resume(file_bytes: bytes) -> str:
+    """Shared by /analyze and /generate-resume: size guard + PDF text extraction."""
+    if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
+        raise ValueError(
+            f"File is too large. Maximum upload size is {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB."
+        )
+    extracted_text = pdf_parser.parse_pdf(file_bytes)
+    if not extracted_text.strip():
+        raise ValueError("Could not extract any usable text from the provided PDF file.")
+    return extracted_text
+
+
 @app.post("/analyze", response_model=AnalysisResponse)
 @limiter.limit("1/5minute", key_func=analyze_rate_limit_key)
 async def analyze_document(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     job_description: Optional[str] = Form(None, max_length=MAX_JOB_DESCRIPTION_CHARS),
     current_user: User = Depends(get_current_user),
@@ -112,22 +125,13 @@ async def analyze_document(
     try:
         # Processing File And Extracting Content
         file_bytes = await file.read()
-        if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
-            raise ValueError(
-                f"File is too large. Maximum upload size is {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB."
-            )
         file_size_kb = len(file_bytes) / 1024
         print(f"[Pipeline] File received: {file.filename} ({file_size_kb:.1f} KB)")
 
         start_time = time.time()
-        extracted_text = pdf_parser.parse_pdf(file_bytes)
+        extracted_text = _read_and_parse_resume(file_bytes)
         parse_time = time.time() - start_time
         print(f"[Pipeline] PDF parsed in {parse_time:.2f}s — extracted {len(extracted_text)} chars")
-
-        if not extracted_text.strip():
-            raise ValueError(
-                "Could not extract any usable text from the provided PDF file."
-            )
 
         if job_description:
             print(f"[Pipeline] Job Description provided — {len(job_description)} chars")
@@ -161,11 +165,61 @@ async def analyze_document(
     except Exception as e:
         # Handling General Unexpected Errors
         print(f"[Pipeline] ERROR: {type(e).__name__}: {e}")
-        
+
         # Converting Exception Object To Safe String Representation For JSON
         raise HTTPException(
             status_code=500,
             detail="Internal Server Error during analysis.",
+        )
+
+
+@app.post("/generate-resume", response_model=AnalysisResponse)
+@limiter.limit("1/5minute", key_func=analyze_rate_limit_key)
+async def generate_resume(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    job_description: str = Form(..., min_length=1, max_length=MAX_JOB_DESCRIPTION_CHARS),
+    current_user: User = Depends(get_current_user),
+):
+    # Rewrites the uploaded resume's content to target the given job description,
+    # keeping the original resume's own template (section order/headings/structure).
+    if pdf_parser is None or llm_analyzer is None:
+        raise HTTPException(
+            status_code=503, detail="Backend services failed to initialize."
+        )
+
+    try:
+        file_bytes = await file.read()
+        print(f"[Pipeline] Resume generation — file received: {file.filename} ({len(file_bytes) / 1024:.1f} KB)")
+
+        start_time = time.time()
+        extracted_text = _read_and_parse_resume(file_bytes)
+
+        generated_resume, metadata = llm_analyzer.generate_tailored_resume(extracted_text, job_description)
+        if not generated_resume:
+            raise HTTPException(status_code=502, detail="Resume generation failed. Please try again.")
+
+        total_time = time.time() - start_time
+        print(f"[Pipeline] Resume generation complete in {total_time:.2f}s — {len(generated_resume)} chars")
+
+        metadata.pop("potential_injection_detected", None)
+        metadata["total_time_s"] = round(total_time, 2)
+        return AnalysisResponse(report=generated_resume, metadata=metadata)
+
+    except ValueError as e:
+        return AnalysisResponse(
+            success=False,
+            report=f"Input Error: {e}",
+            metadata={"error_type": "Input Error"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Pipeline] ERROR generating resume: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error during resume generation.",
         )
 
 

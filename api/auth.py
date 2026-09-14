@@ -39,16 +39,17 @@ auth_limiter = Limiter(key_func=get_remote_address)
 # The IP-based limiter above is largely decorative in this deployment: the
 # Streamlit frontend calls this API server-side, so every browser session
 # reaches FastAPI as the same loopback address, putting all users in one
-# shared bucket. This per-email limiter (kept in-process, per worker — good
-# enough at this app's scale) ensures one targeted email's attempts can't
-# lock everyone else out of login/signup/reset.
+# shared bucket. This per-identifier limiter (kept in-process, per worker —
+# good enough at this app's scale) is keyed by email for pre-auth endpoints
+# and by user id for authenticated ones, so one target's attempts can't lock
+# out everyone else.
 _RATE_LOCK = threading.Lock()
 _RATE_BUCKETS: dict[tuple[str, str], list] = {}
 _RATE_MAX_TRACKED_KEYS = 5000
 
 
-def _check_email_rate_limit(bucket: str, email: str, max_attempts: int, window_seconds: float) -> None:
-    key = (bucket, email)
+def _check_rate_limit(bucket: str, identifier: str, max_attempts: int, window_seconds: float) -> None:
+    key = (bucket, identifier)
     now = time.monotonic()
     with _RATE_LOCK:
         if len(_RATE_BUCKETS) > _RATE_MAX_TRACKED_KEYS:
@@ -75,6 +76,15 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=20, max_length=256)
+    new_password: str = Field(min_length=1, max_length=128)
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=255)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=1, max_length=128)
 
 
@@ -159,7 +169,7 @@ def auth_response(user: User, message: Optional[str] = None) -> AuthResponse:
 async def signup(request: Request, body: AuthRequest, db: Session = Depends(get_db)):
     require_jwt_secret()
     email = normalize_email(body.email)
-    _check_email_rate_limit("signup", email, max_attempts=5, window_seconds=60)
+    _check_rate_limit("signup", email, max_attempts=5, window_seconds=60)
     if len(body.password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
     if get_user_by_email(db, email):
@@ -180,7 +190,7 @@ async def signup(request: Request, body: AuthRequest, db: Session = Depends(get_
 async def login(request: Request, body: AuthRequest, db: Session = Depends(get_db)):
     require_jwt_secret()
     email = normalize_email(body.email)
-    _check_email_rate_limit("login", email, max_attempts=10, window_seconds=60)
+    _check_rate_limit("login", email, max_attempts=10, window_seconds=60)
     user = get_user_by_email(db, email)
     if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -197,7 +207,7 @@ async def forgot_password(
 ):
     """Issue a generic response so account existence cannot be enumerated."""
     email = normalize_email(body.email)
-    _check_email_rate_limit("forgot_password", email, max_attempts=3, window_seconds=900)
+    _check_rate_limit("forgot_password", email, max_attempts=3, window_seconds=900)
     user = get_user_by_email(db, email)
     if user and user.is_active and user.password_hash:
         raw_token = secrets.token_urlsafe(48)
@@ -275,3 +285,41 @@ async def verify(body: ConfirmRequest, db: Session = Depends(get_db)):
 @router.post("/logout", response_model=AuthResponse)
 async def logout():
     return AuthResponse(success=True, message="Logged out successfully.")
+
+
+@router.patch("/me", response_model=AuthResponse)
+async def update_profile(
+    body: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    display_name = body.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Display name cannot be empty.")
+    current_user.display_name = display_name
+    db.commit()
+    return AuthResponse(
+        success=True,
+        user_id=str(current_user.user_id),
+        user_email=current_user.email,
+        display_name=current_user.display_name,
+        message="Profile updated.",
+    )
+
+
+@router.post("/change-password", response_model=AuthResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Keyed by user id (not email): this endpoint requires a valid token already, so it
+    # protects against a stolen token being used to brute-force the current password.
+    _check_rate_limit("change_password", str(current_user.user_id), max_attempts=5, window_seconds=900)
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+    if len(body.new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    current_user.password_hash = hash_password(body.new_password)
+    db.commit()
+    return AuthResponse(success=True, message="Password changed successfully.")
