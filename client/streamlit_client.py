@@ -1,10 +1,14 @@
 # AnalyzeMyCV
 # client/streamlit_client.py
-# Email/password authentication
+# Sign-in is handled by Azure App Service Authentication (Easy Auth)
 
+import base64
+import json
 import os
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
+import jwt
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -12,54 +16,89 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-API_URL = os.getenv("API_URL", "http://localhost:8080")
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8080")
+API_TIMEOUT_SECONDS = 180
+JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
+# Must match api/auth.py.
+TOKEN_ISSUER = "analyzemycv-frontend"
+TOKEN_AUDIENCE = "analyzemycv-api"
+API_TOKEN_TTL_SECONDS = 300
+# App Service sets WEBSITE_AUTH_ENABLED=True when Authentication is turned on.
+EASY_AUTH_ENABLED = os.getenv("WEBSITE_AUTH_ENABLED", "").strip().lower() == "true"
+EASY_AUTH_LOGIN_PATH = os.getenv("EASY_AUTH_LOGIN_PATH", "/.auth/login/aad")
+EASY_AUTH_LOGOUT_PATH = "/.auth/logout?post_logout_redirect_uri=/"
+
+_EMAIL_CLAIMS = (
+    "emails",
+    "email",
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+    "preferred_username",
+)
+_NAME_CLAIMS = ("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name")
 
 
-def load_file_to_bytes(uploaded_file) -> Optional[bytes]:
-    # Converting Uploaded Streamlit File Object To Raw Bytes
-    if uploaded_file is None:
-        return None
-    return uploaded_file.read()
-
-
-def _auth_request(method: str, path: str, payload: dict, access_token: str = "") -> dict:
-    """Call an auth endpoint, normalizing errors to the same {success, message} shape."""
-    headers = {"Authorization": f"Bearer {access_token}"} if access_token else {}
+def _decode_principal_claims(encoded: Optional[str]) -> dict:
+    """Decode Easy Auth's base64 X-MS-CLIENT-PRINCIPAL header into a {claim_type: value} map."""
+    if not encoded:
+        return {}
     try:
-        resp = requests.request(method, f"{API_URL}/auth/{path}", json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        detail = None
-        try:
-            detail = e.response.json().get("detail")
-        except Exception:
-            pass
-        return {"success": False, "message": detail or str(e)}
+        principal = json.loads(base64.b64decode(encoded, validate=True))
+        return {
+            claim["typ"]: claim["val"]
+            for claim in principal.get("claims", [])
+            if isinstance(claim, dict) and isinstance(claim.get("typ"), str) and isinstance(claim.get("val"), str)
+        }
+    except (ValueError, TypeError, AttributeError):
+        return {}
 
 
-def authenticate(endpoint: str, email: str, password: str) -> dict:
-    """Sign up or log in through the FastAPI auth endpoint."""
-    return _auth_request("post", endpoint, {"email": email, "password": password})
+def get_signed_in_user() -> Optional[dict]:
+    """Return the user App Service Authentication signed in, or None.
+
+    Easy Auth authenticates every request before it reaches the container,
+    strips any client-supplied X-MS-CLIENT-PRINCIPAL* headers, and injects its
+    own. Those headers are therefore only trusted when App Service reports
+    that authentication is enabled (WEBSITE_AUTH_ENABLED); otherwise they
+    could be forged by the caller. proxy.py applies the same rule.
+    """
+    if EASY_AUTH_ENABLED:
+        headers = st.context.headers
+        user_id = (headers.get("X-MS-CLIENT-PRINCIPAL-ID") or "").strip()
+        if not user_id:
+            return None
+        claims = _decode_principal_claims(headers.get("X-MS-CLIENT-PRINCIPAL"))
+        email = next(
+            (claims[c] for c in _EMAIL_CLAIMS if claims.get(c)),
+            (headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or "").strip() or None,
+        )
+        name = next((claims[c] for c in _NAME_CLAIMS if claims.get(c)), None) or email
+        return {"user_id": user_id, "email": email, "display_name": name}
+
+    # Never fall back to a dev identity on App Service: if auth is switched off
+    # there, the app must refuse access rather than let everyone in.
+    if os.getenv("WEBSITE_SITE_NAME"):
+        return None
+    dev_email = os.getenv("LOCAL_DEV_USER_EMAIL", "").strip()
+    if dev_email:
+        return {"user_id": f"local-dev:{dev_email}", "email": dev_email, "display_name": dev_email}
+    return None
 
 
-def request_password_reset(email: str) -> dict:
-    return _auth_request("post", "forgot-password", {"email": email})
-
-
-def reset_password(token: str, new_password: str) -> dict:
-    return _auth_request("post", "reset-password", {"token": token, "new_password": new_password})
-
-
-def update_display_name(display_name: str, access_token: str) -> dict:
-    return _auth_request("patch", "me", {"display_name": display_name}, access_token)
-
-
-def change_account_password(current_password: str, new_password: str, access_token: str) -> dict:
-    return _auth_request(
-        "post", "change-password",
-        {"current_password": current_password, "new_password": new_password},
-        access_token,
+def create_api_token(user: dict) -> str:
+    """Short-lived token the internal FastAPI service verifies (see api/auth.py)."""
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "sub": user["user_id"],
+            "email": user.get("email"),
+            "name": user.get("display_name"),
+            "iss": TOKEN_ISSUER,
+            "aud": TOKEN_AUDIENCE,
+            "iat": now,
+            "exp": now + API_TOKEN_TTL_SECONDS,
+        },
+        JWT_SECRET,
+        algorithm="HS256",
     )
 
 
@@ -76,56 +115,36 @@ def _rate_limit_message(response) -> str:
     return "You've hit the rate limit. Please wait a bit and try again."
 
 
-def _call_resume_endpoint(
-    path: str, file_bytes: bytes, job_description: str, access_token: str
-) -> Optional[dict]:
-    """Shared POST logic for /analyze and /generate-resume: same file+form+auth shape."""
-    if file_bytes is None:
-        return {"status": "error", "message": "No file provided."}
-
+def call_api(path: str, file_bytes: bytes, job_description: str, user: dict) -> Tuple[Optional[dict], str]:
+    """POST the resume to /analyze or /generate-resume. Returns (result, error_message)."""
     try:
-        files = {"file": ("uploaded_document.pdf", file_bytes, "application/pdf")}
-        data = {}
-        if job_description:
-            data["job_description"] = job_description
-        headers = {"Authorization": f"Bearer {access_token}"} if access_token else {}
-
-        response = requests.post(f"{API_URL}/{path}", files=files, data=data, headers=headers)
-
+        response = requests.post(
+            f"{API_URL}/{path}",
+            files={"file": ("uploaded_document.pdf", file_bytes, "application/pdf")},
+            data={"job_description": job_description} if job_description else {},
+            headers={"Authorization": f"Bearer {create_api_token(user)}"},
+            timeout=API_TIMEOUT_SECONDS,
+        )
         if response.status_code == 429:
-            return {"status": "error", "message": _rate_limit_message(response)}
-
-        response.raise_for_status()
-        return response.json()
-
+            return None, _rate_limit_message(response)
+        if not response.ok:
+            # Show FastAPI's `detail` only; never raw exception text or internal URLs.
+            try:
+                detail = response.json().get("detail")
+            except ValueError:
+                detail = None
+            return None, detail if isinstance(detail, str) and detail else f"The service returned an error (HTTP {response.status_code})."
+        result = response.json()
+        if not result.get("success"):
+            return None, result.get("report") or "The request failed."
+        return result, ""
+    except requests.exceptions.Timeout:
+        return None, "The request timed out. Please try again."
     except requests.exceptions.ConnectionError:
-        return {
-            "status": "error",
-            "message": f"Connection Error: Could not connect to the API server at {API_URL}. Ensure uvicorn is running.",
-        }
-    except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "message": f"An API request error occurred: {str(e)}",
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
-
-
-def analyze_document_content(
-    file_bytes: bytes, job_description: str = "", access_token: str = ""
-) -> Optional[dict]:
-    # Sending The PDF File Bytes To The FastAPI Backend For Analysis
-    return _call_resume_endpoint("analyze", file_bytes, job_description, access_token)
-
-
-def generate_resume_content(
-    file_bytes: bytes, job_description: str, access_token: str = ""
-) -> Optional[dict]:
-    # Sending The PDF File Bytes + Job Description For A Tailored Resume Rewrite
-    if not job_description or not job_description.strip():
-        return {"status": "error", "message": "A job description is required to generate a tailored resume."}
-    return _call_resume_endpoint("generate-resume", file_bytes, job_description, access_token)
+        return None, "Could not reach the analysis service. Please try again shortly."
+    except (requests.exceptions.RequestException, ValueError) as e:
+        print(f"[Client] API request failed: {type(e).__name__}: {e}")
+        return None, "An unexpected error occurred. Please try again."
 
 
 # Setting Page Config
@@ -154,109 +173,37 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Initialize session state
-if "auth_session" not in st.session_state:
-    st.session_state.auth_session = None
-
-
-# Check if user is authenticated
-if not st.session_state.auth_session:
-    reset_token = st.query_params.get("reset_token")
-    if reset_token:
-        st.title("Reset your password")
-        new_password = st.text_input("New password", type="password")
-        confirm_password = st.text_input("Confirm new password", type="password")
-        if st.button("Reset password"):
-            if new_password != confirm_password:
-                st.error("Passwords do not match.")
-            elif len(new_password) < 8:
-                st.error("Password must be at least 8 characters.")
-            else:
-                result = reset_password(reset_token, new_password)
-                if result.get("success"):
-                    st.query_params.clear()
-                    st.success("Password reset successfully. You can now log in.")
-                else:
-                    st.error(result.get("message", "Password reset failed."))
-        st.stop()
-
+current_user = get_signed_in_user()
+if not current_user:
+    # With "Require authentication" on, Easy Auth redirects anonymous visitors to
+    # sign in before they reach the app, so landing here means a configuration problem.
     st.title("AnalyzeMyCV")
-    st.markdown("Sign in with your email and password.")
-    mode = st.radio("Account", ["Log in", "Create account"], horizontal=True)
-    email = st.text_input("Email", autocomplete="email")
-    password = st.text_input("Password", type="password", autocomplete="current-password")
-    if st.button(mode):
-        endpoint = "login" if mode == "Log in" else "signup"
-        result = authenticate(endpoint, email, password)
-        if result.get("success"):
-            st.session_state.auth_session = result
-            st.rerun()
-        st.error(result.get("message", "Authentication failed."))
-    if mode == "Log in" and st.button("Forgot password?"):
-        st.session_state.show_forgot_password = True
-        st.rerun()
-    if st.session_state.get("show_forgot_password"):
-        st.divider()
-        st.subheader("Reset your password")
-        reset_email = st.text_input("Account email", key="reset_email")
-        if st.button("Send reset link"):
-            result = request_password_reset(reset_email)
-            if result.get("success"):
-                st.success(result.get("message"))
-            else:
-                st.error(result.get("message", "Could not request a reset link."))
-        if st.button("Back to login"):
-            st.session_state.show_forgot_password = False
-            st.rerun()
+    st.error("You are not signed in.")
+    if EASY_AUTH_ENABLED:
+        st.link_button("Sign in", f"{EASY_AUTH_LOGIN_PATH}?post_login_redirect_uri=/")
+    elif os.getenv("WEBSITE_SITE_NAME"):
+        st.caption("App Service Authentication is not enabled for this app.")
+    else:
+        st.caption("For local development, set LOCAL_DEV_USER_EMAIL in your .env file.")
+    st.stop()
+
+if len(JWT_SECRET) < 32:
+    st.error("The app is misconfigured: JWT_SECRET must be set to at least 32 characters.")
     st.stop()
 
 
 # User is authenticated - show main app
-user_email = st.session_state.auth_session.get("user_email", "Unknown")
-user_name = st.session_state.auth_session.get("display_name") or user_email
-access_token = st.session_state.auth_session.get("access_token", "")
+user_email = current_user.get("email") or ""
+user_name = current_user.get("display_name") or user_email or "Signed in"
 
-st.sidebar.markdown(f"**Signed in as**")
-st.sidebar.markdown(f"`{user_name}`")
-st.sidebar.markdown(f"`{user_email}`")
+# st.text renders verbatim, so identity-provider-supplied values can't inject markdown.
+st.sidebar.markdown("**Signed in as**")
+st.sidebar.text(user_name)
+if user_email and user_email != user_name:
+    st.sidebar.text(user_email)
 
-with st.sidebar.expander("Account Settings"):
-    settings_display_name = st.text_input("Display name", value=user_name, key="settings_display_name")
-    if st.button("Save name", key="save_name_btn"):
-        new_name = settings_display_name.strip()
-        if not new_name:
-            st.error("Display name cannot be empty.")
-        else:
-            result = update_display_name(new_name, access_token)
-            if result.get("success"):
-                st.session_state.auth_session["display_name"] = result.get("display_name", new_name)
-                st.success("Name updated.")
-                st.rerun()
-            else:
-                st.error(result.get("message", "Could not update name."))
-
-    st.divider()
-    st.markdown("**Change password**")
-    current_pw = st.text_input("Current password", type="password", key="settings_current_pw")
-    new_pw = st.text_input("New password", type="password", key="settings_new_pw")
-    confirm_pw = st.text_input("Confirm new password", type="password", key="settings_confirm_pw")
-    if st.button("Change password", key="change_pw_btn"):
-        if new_pw != confirm_pw:
-            st.error("New passwords do not match.")
-        elif len(new_pw) < 8:
-            st.error("Password must be at least 8 characters.")
-        else:
-            result = change_account_password(current_pw, new_pw, access_token)
-            if result.get("success"):
-                st.success("Password changed successfully.")
-            else:
-                st.error(result.get("message", "Could not change password."))
-
-# Logout button
-if st.sidebar.button("Sign Out"):
-    st.session_state.auth_session = None
-    st.query_params.clear()
-    st.rerun()
+if EASY_AUTH_ENABLED:
+    st.sidebar.link_button("Sign Out", EASY_AUTH_LOGOUT_PATH)
 
 # Main App Layout
 st.title("AnalyzeMyCV")
@@ -270,8 +217,7 @@ job_description = st.text_area(
 )
 
 if uploaded_file:
-    # Converting Uploaded File To Bytes For The API Call
-    file_bytes = load_file_to_bytes(uploaded_file)
+    file_bytes = uploaded_file.getvalue()
 
     st.info("File loaded. Choose an action below.")
     action_col1, action_col2 = st.columns(2)
@@ -282,61 +228,41 @@ if uploaded_file:
         help="Requires a job description above.",
     )
 
-    if analyze_clicked and file_bytes:
+    if analyze_clicked:
         with st.spinner("Analyzing resume content... This may take a minute."):
-            # Calling The Backend API with authorization
-            analysis_result = analyze_document_content(file_bytes, job_description, access_token)
-
-        if analysis_result.get("success") is True:
+            result, error = call_api("analyze", file_bytes, job_description, current_user)
+        if result:
             st.success("Analysis Complete!")
-            report = analysis_result.get("report")
-
             st.subheader("Full Analysis Report")
-            score_col1, score_col2, score_col3 = st.columns(3)
-            resume_score = analysis_result.get("metadata", {}).get("resume_score")
-            ats_score = analysis_result.get("metadata", {}).get("ats_friendliness_score")
-            match_score = analysis_result.get("metadata", {}).get("match_score")
-            if resume_score is not None:
-                score_col1.metric("Resume Score", f"{resume_score}/100")
-            if ats_score is not None:
-                score_col2.metric("ATS Friendliness", f"{ats_score}/100")
-            if match_score is not None:
-                score_col3.metric("Job Match", f"{match_score}/100")
-            st.markdown(report)
+            metadata = result.get("metadata", {})
+            for col, (key, label) in zip(
+                st.columns(3),
+                (("resume_score", "Resume Score"), ("ats_friendliness_score", "ATS Friendliness"), ("match_score", "Job Match")),
+            ):
+                if metadata.get(key) is not None:
+                    col.metric(label, f"{metadata[key]}/100")
+            st.markdown(result.get("report", ""))
         else:
-            # Handling Errors From The API Or Connection Issues
-            error_message = (
-                analysis_result.get("report")
-                or analysis_result.get("detail")
-                or analysis_result.get("message")
-            )
-            st.error(f"Analysis Failed: {error_message}")
+            st.error(f"Analysis Failed: {error}")
 
-    if generate_clicked and file_bytes:
-        if not job_description or not job_description.strip():
+    if generate_clicked:
+        if not job_description.strip():
             st.error("Please paste a job description above before generating a tailored resume.")
         else:
             with st.spinner("Generating a tailored resume... This may take a minute."):
-                generation_result = generate_resume_content(file_bytes, job_description, access_token)
-
-            if generation_result.get("success") is True:
+                result, error = call_api("generate-resume", file_bytes, job_description, current_user)
+            if result:
                 st.success("Tailored resume generated!")
-                generated_report = generation_result.get("report", "")
                 st.subheader("Tailored Resume")
-                st.markdown(generated_report)
+                st.markdown(result.get("report", ""))
                 st.download_button(
                     "Download tailored resume (Markdown)",
-                    data=generated_report,
+                    data=result.get("report", ""),
                     file_name="tailored_resume.md",
                     mime="text/markdown",
                 )
             else:
-                error_message = (
-                    generation_result.get("report")
-                    or generation_result.get("detail")
-                    or generation_result.get("message")
-                )
-                st.error(f"Resume Generation Failed: {error_message}")
+                st.error(f"Resume Generation Failed: {error}")
 
 else:
     st.markdown("""
@@ -347,5 +273,5 @@ else:
     3. The frontend sends the file to the FastAPI backend.
     4. The backend extracts text and sends it to the LLM for analysis or generation.
     """)
-    st.caption("Powered by Streamlit, FastAPI, Azure OpenAI, PyMuPDF, and Docker on Azure Web App Service.")
+    st.caption("Powered by Streamlit, FastAPI, Azure OpenAI, and PyMuPDF on Azure App Service.")
     st.caption("Created by Vigneshwar K R | [LinkedIn](https://linkedin.com/in/toastcoder) • [GitHub](https://github.com/toastcoder)")

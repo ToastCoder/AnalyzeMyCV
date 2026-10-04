@@ -1,126 +1,52 @@
 # AnalyzeMyCV
 
-AI-powered resume analysis engine built with a FastAPI backend, Streamlit frontend, and Azure OpenAI (GPT-5 Mini). Analyzes resumes against job descriptions to provide semantic scores and gap analysis, hosted on Azure App Service.
+AI-powered resume analysis built with a FastAPI backend, a Streamlit frontend, and Azure OpenAI (GPT-5 Mini). It scores resumes, compares them against job descriptions, and generates tailored rewrites. It's hosted on Azure App Service.
 
 **Production URL:** [https://tinyurl.com/analyzemycv](https://tinyurl.com/analyzemycv)
 
----
+## Architecture
 
-## Tech Stack & Architecture
+```
+Browser ──▶ App Service Authentication ──▶ proxy.py :8000 ──▶ Streamlit 127.0.0.1:8001 ──▶ FastAPI 127.0.0.1:8080 ──▶ Azure OpenAI
+            (Entra External ID sign-in)     (public entry)
+```
 
-* **Frontend UI:** Streamlit (Python-driven reactive web interface)
-* **Backend API:** FastAPI (High-performance API server for robust model orchestration)
-* **AI Engine:** Azure OpenAI API Integration (GPT-5 Mini for contextual parsing and semantic processing using the Responses API)
-* **Infrastructure / Hosting:** Azure App Services (Linux Environment)
-* **CI/CD Pipeline:** GitHub Actions (`master_analyzemycv.yml` automated zip deployment via Oryx)
+* **Authentication:** Azure App Service Authentication ("Easy Auth") with Microsoft Entra External ID. The app stores no users or passwords. Easy Auth passes the signed-in user to the app as `X-MS-CLIENT-PRINCIPAL*` headers. Streamlit forwards that identity to FastAPI as a 5-minute HS256 token signed with `JWT_SECRET`.
+* **Frontend:** Streamlit. **Backend:** FastAPI (PDF parsing with PyMuPDF, per-user rate limiting).
+* **Hosting / CI:** Azure App Service (Linux). GitHub Actions deploys on every push to `master`.
 
----
+## Local development
 
-## Local Quickstart & Installation Steps
+Requires Python 3.9–3.11.
 
-Follow these exact steps to set up and run the application on your local machine.
-
-### Prerequisites
-* **Python:** Ensure you have Python 3.9, 3.10, or 3.11 installed. You can check your version by running:
-  ```bash
-  python3 --version
-  ```
-* **Git:** Installed and configured on your local terminal.
-
-**Step 1: Clone the Repository**
-Clone the codebase to your local system and navigate straight into the project root directory:
 ```bash
 git clone https://github.com/ToastCoder/AnalyzeMyCV.git
 cd AnalyzeMyCV
-```
-
-**Step 2: Create an Isolated Virtual Environment**
-Create a local virtual environment (.venv) to keep the project packages isolated from your global system installations:
-```bash
-python3 -m venv .venv
-```
-
-**Step 3: Activate the Virtual Environment**
-Activate the environment before running installations. This ensures packages are bound strictly to this workspace.
-* On macOS / Linux Distributions (Ubuntu, Debian, Fedora, Arch)
-  ```bash
-  source .venv/bin/activate
-  ```
-* On Windows (Command Prompt)
-  ```cmd
-  .venv\Scripts\activate.bat
-  ```
-* On Windows (PowerShell)
-  ```powershell
-  .venv\Scripts\Activate.ps1
-  ```
-(Once activated, you will see (.venv) prepended to your terminal prompt line.)
-
-**Step 4: Install Project Dependencies**
-Upgrade the base package installer tool and fetch all the core packages listed in the requirements manifest:
-```bash
-pip install --upgrade pip
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env   # then fill in the values
+./entrypoint.sh        # open http://localhost:8000
 ```
 
-**Step 5: Configure Environment Variables Locally**
-Create a .env file in the root folder of your project to securely pass your Azure OpenAI endpoints and keys to the application:
-```bash
-AZURE_OPENAI_API_KEY=your_actual_api_key_here
-AZURE_OPENAI_ENDPOINT=https://your-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-mini
-```
+Easy Auth only exists on App Service, so locally the app signs you in as `LOCAL_DEV_USER_EMAIL`. That setting is ignored on App Service. Without Azure OpenAI credentials, the API returns mock results.
 
-**Step 6: Launch the Local Application Services**
-The application architecture is decoupled into a backend service and a frontend client. Boot up both services concurrently using the provided shell script:
-```bash
-chmod +x ./entrypoint.sh
-./entrypoint.sh
-```
+## Production setup (Azure App Service)
 
-Alternatively, for hot-reloading during active development, you can run them in separate isolated terminal windows:
-* **Terminal 1 (Backend):** `uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload`
-* **Terminal 2 (Frontend):** `streamlit run client/streamlit_client.py --server.port 8000`
+1. **Identity provider:** in the [Entra admin center](https://entra.microsoft.com), create an *external* tenant. Add a **Sign up and sign in** user flow (email with password, collecting Display Name).
+2. **Authentication:** Web App → Settings → Authentication → Add identity provider → **Microsoft**, tenant type **External**. Link the user flow, then set **Require authentication** with a **302 redirect** for unauthenticated requests. Also turn on **HTTPS Only**.
+3. **Environment variables:** set the following.
+   * `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME` (`gpt-5-mini`)
+   * `JWT_SECRET`: at least 32 random characters (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
+   * `EASY_AUTH_LOGIN_PATH`: optional, defaults to `/.auth/login/aad`
+   * `SCM_DO_BUILD_DURING_DEPLOYMENT=true`
+4. **Startup command:** `chmod +x ./entrypoint.sh && ./entrypoint.sh`. The GitHub workflow also sets this.
+5. **Verify:** in Kudu (`https://<app>.scm.azurewebsites.net` → Environment), confirm `WEBSITE_AUTH_ENABLED=True`. The startup log should show `Proxy: App Service Authentication enabled: True`.
 
-Once executed, open your browser to `http://localhost:8000` to view the application live.
+Password reset and email verification are handled by External ID. To disable a user, block their sign-in in the Entra admin center.
 
----
+## Security notes
 
-## Production Deployment (Azure App Service)
-The application is deployed securely as a custom Python web container behind an automated reverse proxy structure on Azure.
-
-### Critical App Settings (Environment Variables)
-To allow heavy binary payloads and clear persistent state processing, the following variables must be configured under Settings -> Environment Variables in the Azure Portal:
-* `AZURE_OPENAI_API_KEY`: Secure token validation endpoint for processing workflows.
-* `AZURE_OPENAI_ENDPOINT`: Full URI string for the Azure API Gateway routing.
-* `AZURE_OPENAI_DEPLOYMENT_NAME`: Set to gpt-5-mini (the exact deployment identity configured in Azure).
-* `STREAMLIT_SERVER_MAX_UPLOAD_SIZE`: Set to 200 to prevent mobile proxy timeouts on multi-page PDF documents.
-* `SCM_DO_BUILD_DURING_DEPLOYMENT`: Set to true to invoke clean automation routines during continuous delivery runs.
-  
-### Production Startup Command
-To ensure both the backend API and frontend client start concurrently and properly bind to the Azure Linux container environment, the startup configuration is managed through a bash script. This command must be defined symmetrically inside the Azure Portal Configuration settings and the GitHub Workflow YAML manifest:
-```bash
-chmod +x ./entrypoint.sh && ./entrypoint.sh
-```
-
-### CI/CD Pipeline
-Continuous deployment is triggered on every manual or automated merge request to the master integration timeline.
-
-```yaml
-name: Deploy AnalyzeMyCV to Azure
-
-on:
-  push:
-    branches:
-      - master
-
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-```
+* Identity headers are trusted only when App Service reports `WEBSITE_AUTH_ENABLED=True`. If authentication is turned off, the proxy drops the headers and the app refuses access.
+* FastAPI and Streamlit listen only on `127.0.0.1`. `proxy.py` is the only public listener, and it adds anti-framing, `nosniff`, referrer and HSTS headers.
+* Uploads are capped at 8 MB. The LLM endpoints allow one request per user every 5 minutes. Error responses never include exception details. Resume content is never logged.
+* Keep secrets in App Service settings or Key Vault, never in git. Rotate `JWT_SECRET` and the Azure OpenAI key if they're exposed.

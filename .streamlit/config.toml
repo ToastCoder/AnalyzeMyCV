@@ -5,3 +5,6 @@ backgroundColor="#09090b"
 secondaryBackgroundColor="#18181b"
 textColor="#f8fafc"
 font="monospace"
+
+[browser]
+gatherUsageStats = false
