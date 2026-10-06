@@ -134,7 +134,8 @@ st.markdown(
         font-style: normal;
         font-display: swap;
     }
-    html, body, p, li, span, a, small, th, td, summary, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select,
+    /* Not the icon spans: Streamlit draws icons as ligature text in the Material Symbols font. */
+    html, body, p, li, span:not([data-testid="stIconMaterial"]), a, small, th, td, summary, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select,
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
         font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
             "Segoe UI", Roboto, sans-serif !important;
