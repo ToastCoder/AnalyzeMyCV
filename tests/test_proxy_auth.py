@@ -112,6 +112,15 @@ class ProxyAuthTest(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         self.assertEqual(await resp.json(), {"X-Auth-User-Id": "user_123"})
 
+    async def test_name_and_email_claims_reach_upstream_percent_encoded(self):
+        token = clerk_token(name="Vignesh K R \u00e9", email="vicky@example.com")
+        resp = await self.client.get("/", cookies={"__session": token})
+        self.assertEqual(await resp.json(), {
+            "X-Auth-User-Id": "user_123",
+            "X-Auth-Email": "vicky%40example.com",
+            "X-Auth-Name": "Vignesh%20K%20R%20%C3%A9",
+        })
+
     async def test_rejects_bad_clerk_tokens(self):
         bad = {
             "expired": clerk_token(exp_in=-60),

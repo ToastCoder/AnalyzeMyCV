@@ -28,6 +28,21 @@ SECURITY_BOUNDARY = (
 STOP_WORDS = {"the", "and", "for", "with", "that", "this", "are", "you", "from", "will", "have"}
 
 
+def _tidy_markdown(text: str, demote_headings: bool = False) -> str:
+    """Normalize common model quirks so Streamlit renders the report cleanly: unwrap a
+    whole-answer code fence, optionally demote # / ## to ### (the app supplies its own
+    page title), and guarantee blank lines around headings."""
+    text = text.strip()
+    fenced = re.fullmatch(r"```(?:markdown|md)?[ \t]*\n(.*?)\n```", text, flags=re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    if demote_headings:
+        text = re.sub(r"(?m)^#{1,2}(?=\s)", "###", text)
+    text = re.sub(r"(?m)([^\n])\n(#{1,6}[ \t])", r"\1\n\n\2", text)
+    text = re.sub(r"(?m)^(#{1,6}[ \t][^\n]*)\n(?=[^\n])", r"\1\n\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
 def _terms(text: str) -> set:
     return set(re.findall(r"[a-z][a-z0-9+#.-]{2,}", text.lower())) - STOP_WORDS
 
@@ -137,7 +152,7 @@ class LLMAnalyzer:
             if key == "match_score" and not job_description:
                 scores[key] = None
                 continue
-            match = re.search(rf"{pattern}\s*[:\-]?\s*(\d{{1,3}})\s*(?:/\s*100)?", report, flags=re.IGNORECASE)
+            match = re.search(rf"{pattern}[\s*_]*[:\-]?[\s*_]*(\d{{1,3}})\s*(?:/\s*100)?", report, flags=re.IGNORECASE)
             score = max(0, min(100, int(match.group(1)) if match else fallback(resume, job_description)))
             if not match:
                 report = f"### {heading}: {score}/100\n\n{report}"
@@ -190,7 +205,7 @@ class LLMAnalyzer:
                 provider, model = "Mock", "mock"
             elapsed = time.time() - start_time
 
-            report, scores = self._ensure_scores(report, safe_resume, safe_jd)
+            report, scores = self._ensure_scores(_tidy_markdown(report, demote_headings=True), safe_resume, safe_jd)
             self.logger.info(f"Analysis by {model} took {elapsed:.2f}s — {len(report)} chars (content not logged).")
             return report, {
                 "llm_provider": provider,
@@ -229,7 +244,7 @@ class LLMAnalyzer:
             generated_resume = self._call_llm(prompts["system_role"], user_message)
             elapsed = time.time() - start_time
             self.logger.info(f"Resume generation took {elapsed:.2f}s — {len(generated_resume)} chars (content not logged).")
-            return generated_resume, {
+            return _tidy_markdown(generated_resume), {
                 "llm_provider": "AzureOpenAI",
                 "model_used": self.deployment_name,
                 "response_time_s": round(elapsed, 2),

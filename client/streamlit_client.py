@@ -137,6 +137,15 @@ st.markdown(
         height: 95px !important;
         min-height: 95px !important;
     }
+    /* Report typography: clear section breaks and readable lists */
+    [data-testid="stMarkdownContainer"] h3 {
+        margin-top: 1.4rem;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px solid #27272a;
+    }
+    [data-testid="stMarkdownContainer"] h4 { margin-top: 1rem; }
+    [data-testid="stMarkdownContainer"] li { margin-bottom: 0.35rem; }
+    [data-testid="stMarkdownContainer"] hr { margin: 1rem 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -210,7 +219,15 @@ if uploaded_file:
             ):
                 if metadata.get(key) is not None:
                     col.metric(label, f"{metadata[key]}/100")
-            st.markdown(result.get("report", ""))
+            report = result.get("report", "")
+            with st.container(border=True):
+                st.markdown(report)
+            st.download_button(
+                "Download report (Markdown)",
+                data=report,
+                file_name="resume_analysis.md",
+                mime="text/markdown",
+            )
         else:
             st.error(f"Analysis Failed: {error}")
 
@@ -223,7 +240,8 @@ if uploaded_file:
             if result:
                 st.success("Tailored resume generated!")
                 st.subheader("Tailored Resume")
-                st.markdown(result.get("report", ""))
+                with st.container(border=True):
+                    st.markdown(result.get("report", ""))
                 st.download_button(
                     "Download tailored resume (Markdown)",
                     data=result.get("report", ""),
