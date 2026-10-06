@@ -136,7 +136,7 @@ AUTH_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>AnalyzeMyCV</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:#09090b;color:#f8fafc;font-family:ui-monospace,Menlo,Consolas,monospace}}
+background:#09090b;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif}}
 #msg{{text-align:center}}</style></head>
 <body><div id="app"><p id="msg">{message}</p></div>
 <script async crossorigin="anonymous" data-clerk-publishable-key="{publishable_key}"
@@ -144,6 +144,7 @@ background:#09090b;color:#f8fafc;font-family:ui-monospace,Menlo,Consolas,monospa
  onload="run()"></script>
 <script>
 const REDIRECT = {redirect};
+const SYSTEM_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif';
 async function run() {{
   const msg = document.getElementById("msg");
   try {{
@@ -170,7 +171,7 @@ SIGN_IN_ACTION = """
     if (window.Clerk.session) { await finish(); return; }
     sessionStorage.removeItem("amcAuthTries");
     msg.remove();
-    window.Clerk.mountSignIn(document.getElementById("app"));
+    window.Clerk.mountSignIn(document.getElementById("app"), { appearance: { variables: { fontFamily: SYSTEM_FONT } } });
     window.Clerk.addListener(({ session }) => { if (session) finish(); });
 """
 

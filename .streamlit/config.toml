@@ -4,7 +4,7 @@ primaryColor="#3b82f6"
 backgroundColor="#09090b"
 secondaryBackgroundColor="#18181b"
 textColor="#f8fafc"
-font="monospace"
+font="sans serif"
 
 [browser]
 gatherUsageStats = false

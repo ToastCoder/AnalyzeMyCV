@@ -121,16 +121,22 @@ st.set_page_config(
     page_title="AnalyzeMyCV", layout="wide", initial_sidebar_state="expanded"
 )
 
-# Injecting Custom CSS To Force JetBrains Mono Font, Reduce Size, And Align Widget Heights
+# Injecting Custom CSS To Use Apple's System UI Font (SF Pro on Apple devices), And Align Widget Heights.
+# SF Pro can't be self-hosted (Apple's licence), so the system stack is used: it resolves to
+# SF Pro on macOS/iOS and to the platform UI font elsewhere. Code blocks stay monospace.
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
-    html, body, p, li, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select {
-        font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace !important;
+    html, body, p, li, span, a, small, th, td, summary, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select,
+    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui,
+            "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    }
+    code, pre, kbd {
+        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace !important;
     }
     html, body {
-        font-size: 14px !important;
+        font-size: 15px !important;
     }
     /* Aligning the height of the text area to match the file uploader dropzone */
     [data-testid="stTextArea"] textarea {
