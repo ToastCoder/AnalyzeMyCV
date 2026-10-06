@@ -138,7 +138,7 @@ background:#09090b;color:#f8fafc;font-family:ui-monospace,Menlo,Consolas,monospa
 #msg{{text-align:center}}</style></head>
 <body><div id="app"><p id="msg">{message}</p></div>
 <script async crossorigin="anonymous" data-clerk-publishable-key="{publishable_key}"
- src="https://{host}/npm/@clerk/clerk-js@6/dist/clerk.browser.js"
+ src="https://{host}/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
  onload="run()"></script>
 <script>
 const REDIRECT = {redirect};
