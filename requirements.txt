@@ -9,4 +9,4 @@ requests
 aiohttp
 pydantic
 python-multipart
-PyJWT>=2.8.0
+PyJWT[crypto]>=2.8.0

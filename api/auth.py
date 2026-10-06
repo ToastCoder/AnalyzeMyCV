@@ -2,10 +2,10 @@
 # api/auth.py
 """Identity for API requests.
 
-End users sign in through Azure App Service Authentication ("Easy Auth"), which
-sits in front of the Streamlit frontend. This API is bound to localhost and is
-only called by that frontend, which forwards the signed-in user as a
-short-lived HS256 token signed with JWT_SECRET (see client/streamlit_client.py).
+End users sign in with Clerk, verified by the reverse proxy (proxy.py) in front of
+the Streamlit frontend. This API is bound to localhost and is only called by that
+frontend, which forwards the signed-in user as a short-lived HS256 token signed
+with JWT_SECRET (see client/streamlit_client.py).
 No credentials or user records are stored by this application.
 """
 

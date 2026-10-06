@@ -1,12 +1,11 @@
 # AnalyzeMyCV
 # client/streamlit_client.py
-# Sign-in is handled by Azure App Service Authentication (Easy Auth)
+# Sign-in is handled by Clerk, verified in proxy.py
 
-import base64
-import json
 import os
 import time
 from typing import Optional, Tuple
+from urllib.parse import unquote
 
 import jwt
 import requests
@@ -23,58 +22,28 @@ JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
 TOKEN_ISSUER = "analyzemycv-frontend"
 TOKEN_AUDIENCE = "analyzemycv-api"
 API_TOKEN_TTL_SECONDS = 300
-# App Service sets WEBSITE_AUTH_ENABLED=True when Authentication is turned on.
-EASY_AUTH_ENABLED = os.getenv("WEBSITE_AUTH_ENABLED", "").strip().lower() == "true"
-EASY_AUTH_LOGIN_PATH = os.getenv("EASY_AUTH_LOGIN_PATH", "/.auth/login/aad")
-EASY_AUTH_LOGOUT_PATH = "/.auth/logout?post_logout_redirect_uri=/"
-
-_EMAIL_CLAIMS = (
-    "emails",
-    "email",
-    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
-    "preferred_username",
-)
-_NAME_CLAIMS = ("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name")
+# proxy.py verifies the Clerk session and sets these headers (any client-sent copy is dropped
+# there). Same rule as proxy.py: they are only trusted once Clerk is configured.
+CLERK_ENABLED = bool(os.getenv("CLERK_PUBLISHABLE_KEY", "").strip())
+SIGN_IN_PATH = "/auth/sign-in?redirect=/"
+SIGN_OUT_PATH = "/auth/sign-out"
 
 
-def _decode_principal_claims(encoded: Optional[str]) -> dict:
-    """Decode Easy Auth's base64 X-MS-CLIENT-PRINCIPAL header into a {claim_type: value} map."""
-    if not encoded:
-        return {}
-    try:
-        principal = json.loads(base64.b64decode(encoded, validate=True))
-        return {
-            claim["typ"]: claim["val"]
-            for claim in principal.get("claims", [])
-            if isinstance(claim, dict) and isinstance(claim.get("typ"), str) and isinstance(claim.get("val"), str)
-        }
-    except (ValueError, TypeError, AttributeError):
-        return {}
+def _header(name: str) -> Optional[str]:
+    value = unquote(st.context.headers.get(name) or "").strip()
+    return value or None
 
 
 def get_signed_in_user() -> Optional[dict]:
-    """Return the user App Service Authentication signed in, or None.
-
-    Easy Auth authenticates every request before it reaches the container,
-    strips any client-supplied X-MS-CLIENT-PRINCIPAL* headers, and injects its
-    own. Those headers are therefore only trusted when App Service reports
-    that authentication is enabled (WEBSITE_AUTH_ENABLED); otherwise they
-    could be forged by the caller. proxy.py applies the same rule.
-    """
-    if EASY_AUTH_ENABLED:
-        headers = st.context.headers
-        user_id = (headers.get("X-MS-CLIENT-PRINCIPAL-ID") or "").strip()
+    """Return the user the proxy signed in through Clerk, or None."""
+    if CLERK_ENABLED:
+        user_id = _header("X-Auth-User-Id")
         if not user_id:
             return None
-        claims = _decode_principal_claims(headers.get("X-MS-CLIENT-PRINCIPAL"))
-        email = next(
-            (claims[c] for c in _EMAIL_CLAIMS if claims.get(c)),
-            (headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or "").strip() or None,
-        )
-        name = next((claims[c] for c in _NAME_CLAIMS if claims.get(c)), None) or email
-        return {"user_id": user_id, "email": email, "display_name": name}
+        email, name = _header("X-Auth-Email"), _header("X-Auth-Name")
+        return {"user_id": user_id, "email": email, "display_name": name or email}
 
-    # Never fall back to a dev identity on App Service: if auth is switched off
+    # Never fall back to a dev identity on App Service: if Clerk isn't configured
     # there, the app must refuse access rather than let everyone in.
     if os.getenv("WEBSITE_SITE_NAME"):
         return None
@@ -175,14 +144,14 @@ st.markdown(
 
 current_user = get_signed_in_user()
 if not current_user:
-    # With "Require authentication" on, Easy Auth redirects anonymous visitors to
-    # sign in before they reach the app, so landing here means a configuration problem.
+    # The proxy redirects anonymous visitors to sign in before they reach the app,
+    # so landing here means a configuration problem.
     st.title("AnalyzeMyCV")
     st.error("You are not signed in.")
-    if EASY_AUTH_ENABLED:
-        st.link_button("Sign in", f"{EASY_AUTH_LOGIN_PATH}?post_login_redirect_uri=/")
+    if CLERK_ENABLED:
+        st.link_button("Sign in", SIGN_IN_PATH)
     elif os.getenv("WEBSITE_SITE_NAME"):
-        st.caption("App Service Authentication is not enabled for this app.")
+        st.caption("Clerk is not configured for this app.")
     else:
         st.caption("For local development, set LOCAL_DEV_USER_EMAIL in your .env file.")
     st.stop()
@@ -202,8 +171,8 @@ st.sidebar.text(user_name)
 if user_email and user_email != user_name:
     st.sidebar.text(user_email)
 
-if EASY_AUTH_ENABLED:
-    st.sidebar.link_button("Sign Out", EASY_AUTH_LOGOUT_PATH)
+if CLERK_ENABLED:
+    st.sidebar.link_button("Sign Out", SIGN_OUT_PATH)
 
 # Main App Layout
 st.title("AnalyzeMyCV")
