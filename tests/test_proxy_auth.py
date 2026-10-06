@@ -2,6 +2,7 @@
 # tests/test_proxy_auth.py
 """Clerk session handling in proxy.py, with a fake upstream and a locally generated Clerk key."""
 
+import gzip
 import time
 import unittest
 from types import SimpleNamespace
@@ -38,6 +39,8 @@ class FakeJWKS:
 class ProxyAuthTest(AioHTTPTestCase):
     async def get_application(self):
         async def echo(request):
+            if request.path == "/gz":
+                return web.Response(body=gzip.compress(b"x" * 10_000), headers={"Content-Encoding": "gzip"})
             return web.json_response({k: v for k, v in request.headers.items() if k.lower().startswith("x-auth-")})
 
         upstream = web.Application()
@@ -139,6 +142,12 @@ class ProxyAuthTest(AioHTTPTestCase):
         )
         resp = await self.client.get("/", headers=PAGE, cookies={"amc_session": forged}, allow_redirects=False)
         self.assertEqual(resp.status, 302)
+
+    async def test_compressed_responses_are_forwarded_without_decompressing(self):
+        resp = await self.client.get("/gz", cookies={"__session": clerk_token()}, auto_decompress=False)
+        self.assertEqual(resp.headers["Content-Encoding"], "gzip")
+        self.assertEqual(gzip.decompress(await resp.read()), b"x" * 10_000)
+        self.assertLess(int(resp.headers["Content-Length"]), 1000)
 
     async def test_health_is_public(self):
         resp = await self.client.get("/_stcore/health")

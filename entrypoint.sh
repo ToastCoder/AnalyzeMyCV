@@ -5,11 +5,18 @@
 # A single worker keeps the in-process per-user rate limit accurate; blocking PDF
 # and LLM work runs in a thread pool, so requests still proceed concurrently.
 echo "Starting FastAPI Backend Service on 127.0.0.1:8080..."
-uvicorn api.main:app --host 127.0.0.1 --port 8080 --workers 1 &
+uvicorn api.main:app --host 127.0.0.1 --port 8080 --workers 1 --no-access-log &
 FASTAPI_PID=$!
 echo "FastAPI Backend started with PID: $FASTAPI_PID"
 
-sleep 3
+# Wait for FastAPI to be ready (instead of a fixed sleep) before the frontend starts.
+for i in $(seq 1 30); do
+  if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)" >/dev/null 2>&1; then
+    echo "FastAPI is ready."
+    break
+  fi
+  sleep 1
+done
 
 # Setting Web App Port
 PORT="${WEBSITES_PORT:-8000}"

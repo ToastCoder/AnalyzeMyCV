@@ -26,8 +26,10 @@ HEALTH_PATH = "/_stcore/health"
 
 # Request headers that must not be copied verbatim to the upstream request.
 HOP_BY_HOP_REQUEST_HEADERS = {"host", "connection", "transfer-encoding", "keep-alive", "upgrade"}
-# The body is re-sent decoded and un-chunked, so these upstream values no longer apply.
-DROPPED_RESPONSE_HEADERS = {"transfer-encoding", "content-encoding", "content-length", "connection"}
+# The body is buffered and re-sent un-chunked, so these upstream values no longer apply.
+# Content-Encoding is kept: bodies are forwarded still compressed (about 4x smaller for
+# Streamlit's JS bundle), and the client's own Accept-Encoding is what Streamlit honours.
+DROPPED_RESPONSE_HEADERS = {"transfer-encoding", "content-length", "connection"}
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -234,7 +236,7 @@ async def handle_catchall(request):
 
 
 async def create_client_session(app):
-    app["client_session"] = ClientSession(auto_decompress=True)
+    app["client_session"] = ClientSession(auto_decompress=False)
     yield
     await app["client_session"].close()
 

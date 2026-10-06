@@ -4,9 +4,8 @@ openai>=1.66.0
 pymupdf
 python-dotenv
 fastapi
-uvicorn[standard]
+uvicorn
 requests
 aiohttp
-pydantic
 python-multipart
 PyJWT[crypto]>=2.8.0

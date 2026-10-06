@@ -33,6 +33,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024  # 8 MB is generous for a text-based resume PDF
 MAX_JOB_DESCRIPTION_CHARS = 20_000
+# Shared by both LLM endpoints, so each user gets one LLM call per window in total.
+LLM_RATE_LIMIT = "1/5minute"
 
 llm_analyzer = LLMAnalyzer()
 
@@ -96,7 +98,7 @@ async def _run_pipeline(
 
 
 @app.post("/analyze", response_model=AnalysisResponse)
-@limiter.limit("1/5minute", key_func=user_rate_limit_key)
+@limiter.shared_limit(LLM_RATE_LIMIT, scope="llm", key_func=user_rate_limit_key)
 async def analyze_document(
     request: Request,
     response: Response,
@@ -108,7 +110,7 @@ async def analyze_document(
 
 
 @app.post("/generate-resume", response_model=AnalysisResponse)
-@limiter.limit("1/5minute", key_func=user_rate_limit_key)
+@limiter.shared_limit(LLM_RATE_LIMIT, scope="llm", key_func=user_rate_limit_key)
 async def generate_resume(
     request: Request,
     response: Response,
