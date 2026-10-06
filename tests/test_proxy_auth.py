@@ -63,12 +63,7 @@ class ProxyAuthTest(AioHTTPTestCase):
             self.addCleanup(p.stop)
         self.addAsyncCleanup(self.upstream.close)
         # A fresh app per test: aiohttp applications can't be reused across event loops.
-        app = web.Application(client_max_size=proxy.MAX_REQUEST_BYTES, middlewares=[proxy.auth_middleware])
-        app.cleanup_ctx.append(proxy.create_client_session)
-        app.router.add_get(proxy.SIGN_IN_PATH, proxy.sign_in_page)
-        app.router.add_get(proxy.SIGN_OUT_PATH, proxy.sign_out_page)
-        app.router.add_route("*", "/{path_info:.*}", proxy.handle_catchall)
-        return app
+        return proxy.make_app()
 
     async def test_anonymous_page_redirects_to_sign_in(self):
         resp = await self.client.get("/some/page?x=1", headers=PAGE, allow_redirects=False)
@@ -157,6 +152,31 @@ class ProxyAuthTest(AioHTTPTestCase):
         self.assertEqual(resp.headers["Content-Encoding"], "gzip")
         self.assertEqual(gzip.decompress(await resp.read()), b"x" * 10_000)
         self.assertLess(int(resp.headers["Content-Length"]), 1000)
+
+    async def test_every_response_carries_security_headers(self):
+        cases = (
+            await self.client.get("/", headers=PAGE, allow_redirects=False),   # 302 generated here
+            await self.client.get("/_stcore/stream", allow_redirects=False),   # 401 generated here
+            await self.client.get("/auth/sign-in"),                            # page generated here
+            await self.client.get("/", cookies={"__session": clerk_token()}),  # proxied
+        )
+        for resp in cases:
+            with self.subTest(status=resp.status):
+                self.assertEqual(resp.headers["X-Content-Type-Options"], "nosniff")
+                self.assertEqual(resp.headers["X-Frame-Options"], "SAMEORIGIN")
+
+    async def test_font_is_public_cacheable_and_pages_use_it(self):
+        resp = await self.client.get("/auth/fonts/InterVariable.woff2")  # no session
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.headers["Content-Type"], "font/woff2")
+        self.assertIn("immutable", resp.headers["Cache-Control"])
+        self.assertEqual((await resp.read())[:4], b"wOF2")
+        page = await (await self.client.get("/auth/sign-in")).text()
+        self.assertIn('src:url("/auth/fonts/InterVariable.woff2")', page)
+
+    async def test_other_auth_paths_are_not_public_files(self):
+        resp = await self.client.get("/auth/fonts/../../clerk_auth.py", headers=PAGE, allow_redirects=False)
+        self.assertIn(resp.status, (302, 401, 404))
 
     async def test_health_is_public(self):
         resp = await self.client.get("/_stcore/health")

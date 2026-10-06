@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import os
+from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import web, ClientSession, WSMsgType
@@ -23,6 +24,11 @@ IDENTITY_HEADER_PREFIX = "x-auth-"
 SIGN_IN_PATH = "/auth/sign-in"
 SIGN_OUT_PATH = "/auth/sign-out"
 HEALTH_PATH = "/_stcore/health"
+# Inter (SIL OFL) is self-hosted: served here, under /auth/ so the sign-in page can use it
+# before login, and cached for a year. Rename the file if it is ever replaced.
+FONT_PATH = "/auth/fonts/InterVariable.woff2"
+FONT_FILE = Path(__file__).resolve().parent / "assets" / "fonts" / "InterVariable.woff2"
+FONT_STACK = 'Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif'
 
 # Request headers that must not be copied verbatim to the upstream request.
 HOP_BY_HOP_REQUEST_HEADERS = {"host", "connection", "transfer-encoding", "keep-alive", "upgrade"}
@@ -109,8 +115,6 @@ async def proxy_http(request):
         resp_headers = CIMultiDict(
             (k, v) for k, v in resp.headers.items() if k.lower() not in DROPPED_RESPONSE_HEADERS
         )
-        for k, v in SECURITY_HEADERS.items():
-            resp_headers.setdefault(k, v)
         resp_body = await resp.read()
         response = web.Response(status=resp.status, headers=resp_headers, body=resp_body)
         if request.get("new_session_cookie"):
@@ -132,11 +136,18 @@ def safe_redirect_target(target: str) -> str:
     return "/"
 
 
+async def font_file(request):
+    return web.FileResponse(
+        FONT_FILE, headers={"Content-Type": "font/woff2", "Cache-Control": "public, max-age=31536000, immutable"}
+    )
+
+
 AUTH_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>AnalyzeMyCV</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:#09090b;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif}}
+<style>@font-face{{font-family:Inter;src:url("{font_path}") format("woff2");font-weight:100 900;font-display:swap}}
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#09090b;color:#f8fafc;font-family:{font_stack}}}
 #msg{{text-align:center}}</style></head>
 <body><div id="app"><p id="msg">{message}</p></div>
 <script async crossorigin="anonymous" data-clerk-publishable-key="{publishable_key}"
@@ -144,7 +155,7 @@ background:#09090b;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"S
  onload="run()"></script>
 <script>
 const REDIRECT = {redirect};
-const SYSTEM_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif';
+const FONT_STACK = {font_stack_js};
 async function run() {{
   const msg = document.getElementById("msg");
   try {{
@@ -171,7 +182,7 @@ SIGN_IN_ACTION = """
     if (window.Clerk.session) { await finish(); return; }
     sessionStorage.removeItem("amcAuthTries");
     msg.remove();
-    window.Clerk.mountSignIn(document.getElementById("app"), { appearance: { variables: { fontFamily: SYSTEM_FONT } } });
+    window.Clerk.mountSignIn(document.getElementById("app"), { appearance: { variables: { fontFamily: FONT_STACK } } });
     window.Clerk.addListener(({ session }) => { if (session) finish(); });
 """
 
@@ -190,6 +201,9 @@ def auth_page(action: str, redirect: str, message: str) -> web.Response:
         redirect=json.dumps(redirect).replace("<", "\\u003c"),
         action=action,
         message=message,
+        font_path=FONT_PATH,
+        font_stack=FONT_STACK.replace('"', "&quot;"),
+        font_stack_js=json.dumps(FONT_STACK),
     )
     return web.Response(text=body, content_type="text/html", headers={"Cache-Control": "no-store"})
 
@@ -205,6 +219,18 @@ async def sign_out_page(request):
 
 
 @web.middleware
+async def security_headers_middleware(request, handler):
+    """Outermost, so every response (proxied or generated here, including errors and redirects) gets them."""
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
+
+
+@web.middleware
 async def auth_middleware(request, handler):
     request["user"] = None
     path = request.path
@@ -214,7 +240,7 @@ async def auth_middleware(request, handler):
         if ON_APP_SERVICE or clerk_auth.CONFIGURED:
             return web.Response(status=503, text="Authentication is not configured correctly.")
         return await handler(request)  # local development: Streamlit falls back to LOCAL_DEV_USER_EMAIL
-    if path in (SIGN_IN_PATH, SIGN_OUT_PATH):
+    if path in (SIGN_IN_PATH, SIGN_OUT_PATH, FONT_PATH):
         return await handler(request)
 
     user, new_cookie = await clerk_auth.authenticate(request.cookies, request.app["client_session"])
@@ -242,11 +268,17 @@ async def create_client_session(app):
     await app["client_session"].close()
 
 
-app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[auth_middleware])
-app.cleanup_ctx.append(create_client_session)
-app.router.add_get(SIGN_IN_PATH, sign_in_page)
-app.router.add_get(SIGN_OUT_PATH, sign_out_page)
-app.router.add_route("*", "/{path_info:.*}", handle_catchall)
+def make_app() -> web.Application:
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[security_headers_middleware, auth_middleware])
+    app.cleanup_ctx.append(create_client_session)
+    app.router.add_get(SIGN_IN_PATH, sign_in_page)
+    app.router.add_get(SIGN_OUT_PATH, sign_out_page)
+    app.router.add_get(FONT_PATH, font_file)
+    app.router.add_route("*", "/{path_info:.*}", handle_catchall)
+    return app
+
+
+app = make_app()
 
 if __name__ == "__main__":
     print(f"Proxy: Starting on port {PROXY_PORT}, forwarding to Streamlit on {STREAMLIT_PORT}")

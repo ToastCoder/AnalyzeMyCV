@@ -121,16 +121,23 @@ st.set_page_config(
     page_title="AnalyzeMyCV", layout="wide", initial_sidebar_state="expanded"
 )
 
-# Injecting Custom CSS To Use Apple's System UI Font (SF Pro on Apple devices), And Align Widget Heights.
-# SF Pro can't be self-hosted (Apple's licence), so the system stack is used: it resolves to
-# SF Pro on macOS/iOS and to the platform UI font elsewhere. Code blocks stay monospace.
+# Injecting Custom CSS To Use The Inter Font, Reduce Size, And Align Widget Heights.
+# Inter (SIL OFL) is self-hosted by proxy.py at /auth/fonts/; the system UI fonts are the fallback.
+# Code blocks stay monospace.
 st.markdown(
     """
     <style>
+    @font-face {
+        font-family: "Inter";
+        src: url("/auth/fonts/InterVariable.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+    }
     html, body, p, li, span, a, small, th, td, summary, h1, h2, h3, h4, h5, h6, label, button, input, textarea, select,
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui,
-            "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+            "Segoe UI", Roboto, sans-serif !important;
     }
     code, pre, kbd {
         font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace !important;
