@@ -42,7 +42,7 @@ With `CLERK_PUBLISHABLE_KEY` empty, the app signs you in as `LOCAL_DEV_USER_EMAI
 4. **Startup command:** `chmod +x ./entrypoint.sh && ./entrypoint.sh`. The GitHub workflow also sets this.
 5. **Verify:** the startup log should show `Proxy: Clerk authentication enabled: True`, and an anonymous request should redirect to `/auth/sign-in`.
 
-Password reset and email verification are handled by Clerk. To disable a user, ban them in the Clerk dashboard; it applies within 15 minutes (the proxy session lifetime).
+Password reset and email verification are handled by Clerk. To disable a user, ban them in the Clerk dashboard; it applies within an hour (the proxy session lifetime, `SESSION_TTL_SECONDS`, default 3600).
 
 ## Security notes
 

@@ -178,6 +178,12 @@ class ProxyAuthTest(AioHTTPTestCase):
         resp = await self.client.get("/auth/fonts/../../clerk_auth.py", headers=PAGE, allow_redirects=False)
         self.assertIn(resp.status, (302, 401, 404))
 
+    async def test_streamlit_static_bundle_is_public_but_other_paths_are_not(self):
+        self.assertEqual((await self.client.get("/static/js/Metric.abc.js")).status, 200)
+        for path in ("/media/abc.md", "/_stcore/upload_file/x/y", "/staticfoo", "/app/static/secret"):
+            with self.subTest(path):
+                self.assertEqual((await self.client.get(path, allow_redirects=False)).status, 401)
+
     async def test_health_is_public(self):
         resp = await self.client.get("/_stcore/health")
         self.assertEqual(resp.status, 200)

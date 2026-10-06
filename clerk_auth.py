@@ -37,7 +37,9 @@ AUTHORIZED_PARTIES = {
 MIN_SECRET_LENGTH = 32
 CLERK_SESSION_COOKIE = "__session"
 SESSION_COOKIE = "amc_session"
-SESSION_TTL_SECONDS = 900  # also how long a Clerk-side ban/sign-out can take to apply
+# Also how long a Clerk-side ban can take to apply. Streamlit's upload and download requests
+# need the cookie, so it has to outlast a normal visit; the Clerk token itself lasts 60 seconds.
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
 SESSION_ISSUER = "analyzemycv-proxy"
 SESSION_AUDIENCE = "analyzemycv-proxy"
 CLERK_API_URL = "https://api.clerk.com/v1"

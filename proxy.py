@@ -24,6 +24,7 @@ IDENTITY_HEADER_PREFIX = "x-auth-"
 SIGN_IN_PATH = "/auth/sign-in"
 SIGN_OUT_PATH = "/auth/sign-out"
 HEALTH_PATH = "/_stcore/health"
+PUBLIC_STATIC_PREFIX = "/static/"
 # Inter (SIL OFL) is self-hosted: served here, under /auth/ so the sign-in page can use it
 # before login, and cached for a year. Rename the file if it is ever replaced.
 FONT_PATH = "/auth/fonts/InterVariable.woff2"
@@ -234,7 +235,10 @@ async def security_headers_middleware(request, handler):
 async def auth_middleware(request, handler):
     request["user"] = None
     path = request.path
-    if path == HEALTH_PATH:  # platform health probes
+    # Health probes and Streamlit's frontend bundle: identical for everyone, no user data. The bundle
+    # must stay public because Streamlit lazy-loads widget scripts mid-session, possibly after the
+    # session cookie has expired, and a 401 there breaks the widget ("Importing a module script failed").
+    if path == HEALTH_PATH or path.startswith(PUBLIC_STATIC_PREFIX):
         return await handler(request)
     if not clerk_auth.ENABLED:
         if ON_APP_SERVICE or clerk_auth.CONFIGURED:
