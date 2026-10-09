@@ -94,6 +94,20 @@ class ResumeDataTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     parse_resume_json(raw)
 
+    def test_markdown_cannot_carry_images_or_links(self):
+        attack = "![x](https://a.io/?q=1) [c](https://e.io) <img src=x>"
+        r = Resume.model_validate({"name": attack, "headline": attack, "summary": attack, "sections": [
+            {"title": attack, "text": attack, "skills": [{"label": attack, "items": attack}],
+             "entries": [{"title": attack, "organization": attack, "dates": attack, "bullets": [attack]}]}]})
+        md = to_markdown(r)
+        try:
+            from markdown_it import MarkdownIt
+        except ImportError:  # markdown-it-py ships with Streamlit's dependencies; skip if absent
+            self.skipTest("markdown-it-py not installed")
+        html = MarkdownIt("commonmark", {"html": False}).render(md)
+        for tag in ("<img", "<a ", "<script"):
+            self.assertNotIn(tag, html)
+
     def test_markdown(self):
         md = to_markdown(Resume.model_validate(NASTY))
         self.assertTrue(md.startswith("# José O'Brien & Sons"))
@@ -148,6 +162,18 @@ class TemplateTest(unittest.TestCase):
                     proc = subprocess.run(["tectonic", path], capture_output=True, text=True, timeout=300, cwd=tmp)
                     self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
                     self.assertTrue(os.path.exists(path[:-4] + ".pdf"))
+
+
+class NeutralizeMarkdownTest(unittest.TestCase):
+    def test_images_are_removed_and_links_show_their_destination(self):
+        from api.services.llm_analyzer import _neutralize_markdown as n
+        out = n("### A\n![x](https://evil.example/?q=1)\n![y][ref]\n[Verify](https://evil.example/login \"t\")\n<img src=x>\n[ref]: http://evil.example\n- ok")
+        self.assertNotIn("![", out)
+        self.assertNotIn("<img", out)
+        self.assertNotIn("](", out)
+        self.assertNotIn("[ref]:", out)
+        self.assertIn("Verify (https://evil.example/login)", out)
+        self.assertIn("- ok", out)
 
 
 class GenerateFlowTest(unittest.TestCase):

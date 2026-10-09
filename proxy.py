@@ -3,10 +3,11 @@ import html
 import json
 import os
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import web, ClientSession, WSMsgType
 from multidict import CIMultiDict
+from yarl import URL
 
 import clerk_auth
 
@@ -24,6 +25,8 @@ IDENTITY_HEADER_PREFIX = "x-auth-"
 SIGN_IN_PATH = "/auth/sign-in"
 SIGN_OUT_PATH = "/auth/sign-out"
 HEALTH_PATH = "/_stcore/health"
+# Extra hostnames (comma-separated) accepted in the Origin header, for hosting that rewrites Host.
+EXTRA_ALLOWED_HOSTS = {h.strip().lower() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()}
 PUBLIC_STATIC_PREFIX = "/static/"
 # Inter (SIL OFL) is self-hosted: served here, under /auth/ so the sign-in page can use it
 # before login, and cached for a year. Rename the file if it is ever replaced.
@@ -50,12 +53,25 @@ if ON_APP_SERVICE:
     SECURITY_HEADERS["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
 
+# Session cookies are for this proxy only; Streamlit (and any code it runs) never needs them.
+PRIVATE_COOKIE_PREFIXES = (clerk_auth.SESSION_COOKIE, "__session", "__client", "__clerk", "__refresh")
+
+
+def strip_private_cookies(cookie_header: str) -> str:
+    kept = [c for c in cookie_header.split(";") if not c.strip().startswith(PRIVATE_COOKIE_PREFIXES)]
+    return ";".join(kept).strip()
+
+
 def upstream_request_headers(request) -> CIMultiDict:
     """Client headers minus hop-by-hop ones and any forged identity; plus the verified identity."""
     headers = CIMultiDict()
     for k, v in request.headers.items():
         if k.lower() in HOP_BY_HOP_REQUEST_HEADERS or k.lower().startswith(IDENTITY_HEADER_PREFIX):
             continue
+        if k.lower() == "cookie":
+            v = strip_private_cookies(v)
+            if not v:
+                continue
         headers.add(k, v)
     user = request.get("user")
     if user:
@@ -63,10 +79,18 @@ def upstream_request_headers(request) -> CIMultiDict:
     return headers
 
 
+def upstream_url(request) -> URL:
+    """The request's own encoded path and query, byte for byte. Rebuilding it from the decoded
+    path would let `..` or an encoded `/` change which upstream route the request reaches
+    after the auth decision was made on a different-looking path."""
+    raw = request.rel_url.raw_path
+    if request.rel_url.raw_query_string:
+        raw += "?" + request.rel_url.raw_query_string
+    return URL(f"http://127.0.0.1:{STREAMLIT_PORT}{raw}", encoded=True)
+
+
 async def proxy_websocket(request):
-    target = f"http://127.0.0.1:{STREAMLIT_PORT}{request.path}"
-    if request.query_string:
-        target += "?" + request.query_string
+    target = upstream_url(request)
 
     req_protocols = request.headers.get("Sec-WebSocket-Protocol", "")
     protocols = tuple(p.strip() for p in req_protocols.split(",")) if req_protocols else ()
@@ -100,11 +124,7 @@ async def proxy_websocket(request):
 
 
 async def proxy_http(request):
-    path = request.path
-    if request.query_string:
-        path += "?" + request.query_string
-
-    target = f"http://127.0.0.1:{STREAMLIT_PORT}{path}"
+    target = upstream_url(request)
     body = await request.read()
 
     session: ClientSession = request.app["client_session"]
@@ -224,11 +244,52 @@ async def security_headers_middleware(request, handler):
     """Outermost, so every response (proxied or generated here, including errors and redirects) gets them."""
     try:
         response = await handler(request)
-    except web.HTTPException as exc:
-        response = exc
+    except web.HTTPException as exc:  # e.g. aiohttp's own 404/405; turned into a normal response
+        response = web.Response(status=exc.status, text=exc.text or exc.reason)
+        if "Location" in exc.headers:
+            response.headers["Location"] = exc.headers["Location"]
     for k, v in SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
     return response
+
+
+def is_suspicious_path(request) -> bool:
+    """Paths that could be read differently by this proxy and by Streamlit: encoded slashes,
+    backslashes, double-encoding, NULs, and dot segments (which the auth rules must never see
+    as a public-looking prefix such as /static/../_stcore/...)."""
+    raw = request.rel_url.raw_path
+    lowered = raw.lower()
+    if any(token in lowered for token in ("%2f", "%5c", "%00", "%25")) or "\\" in raw:
+        return True
+    return any(segment in ("..", ".") for segment in unquote(raw).split("/"))
+
+
+def origin_matches(request) -> bool:
+    """Browsers send Origin on WebSocket handshakes and cross-site writes. If it names another
+    site, refuse: cookie-authenticated requests must come from this app's own pages."""
+    origin = request.headers.get("Origin")
+    if not origin or origin == "null":
+        return origin is None  # "null" (sandboxed/opaque origins) is never ours
+    allowed = {request.host.lower(), *EXTRA_ALLOWED_HOSTS}
+    forwarded = request.headers.get("X-Forwarded-Host", "").split(",")[0].strip().lower()
+    if forwarded:
+        allowed.add(forwarded)
+    netloc = urlsplit(origin).netloc.lower()
+    if netloc in allowed:
+        return True
+    # Hostnames only (no cookies, no content): enough to diagnose a proxy that rewrites Host.
+    print(f"Proxy: refused cross-origin request: origin={netloc} host={request.host.lower()} (set ALLOWED_HOSTS to allow more)")
+    return False
+
+
+@web.middleware
+async def request_guard_middleware(request, handler):
+    if is_suspicious_path(request):
+        return web.Response(status=400, text="Bad request.")
+    is_ws = request.headers.get("Upgrade", "").lower() == "websocket"
+    if (is_ws or request.method not in ("GET", "HEAD", "OPTIONS")) and not origin_matches(request):
+        return web.Response(status=403, text="Cross-origin request refused.")
+    return await handler(request)
 
 
 @web.middleware
@@ -238,7 +299,7 @@ async def auth_middleware(request, handler):
     # Health probes and Streamlit's frontend bundle: identical for everyone, no user data. The bundle
     # must stay public because Streamlit lazy-loads widget scripts mid-session, possibly after the
     # session cookie has expired, and a 401 there breaks the widget ("Importing a module script failed").
-    if path == HEALTH_PATH or path.startswith(PUBLIC_STATIC_PREFIX):
+    if request.method in ("GET", "HEAD") and (path == HEALTH_PATH or path.startswith(PUBLIC_STATIC_PREFIX)):
         return await handler(request)
     if not clerk_auth.ENABLED:
         if ON_APP_SERVICE or clerk_auth.CONFIGURED:
@@ -256,7 +317,10 @@ async def auth_middleware(request, handler):
     wants_page = request.method == "GET" and "text/html" in request.headers.get("Accept", "")
     if wants_page and request.headers.get("Upgrade", "").lower() != "websocket":
         target = path + ("?" + request.query_string if request.query_string else "")
-        return web.HTTPFound(f"{SIGN_IN_PATH}?redirect={quote(target, safe='')}", headers={"Cache-Control": "no-store"})
+        return web.Response(
+            status=302,
+            headers={"Location": f"{SIGN_IN_PATH}?redirect={quote(target, safe='')}", "Cache-Control": "no-store"},
+        )
     return web.Response(status=401, text="Authentication required.")
 
 
@@ -273,7 +337,7 @@ async def create_client_session(app):
 
 
 def make_app() -> web.Application:
-    app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[security_headers_middleware, auth_middleware])
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[security_headers_middleware, request_guard_middleware, auth_middleware])
     app.cleanup_ctx.append(create_client_session)
     app.router.add_get(SIGN_IN_PATH, sign_in_page)
     app.router.add_get(SIGN_OUT_PATH, sign_out_page)

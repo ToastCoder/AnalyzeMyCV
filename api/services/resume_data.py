@@ -174,29 +174,38 @@ def contact_items(resume: Resume) -> List[str]:
     ]
 
 
+_MD_ACTIVE = re.compile(r"([\\`\[\]<>])")
+
+
+def _md(text: str) -> str:
+    """Neutralize Markdown that could fetch or link anything: `![x](https://host/?q=...)` would be
+    rendered as an image the browser loads without a click. Model-written text is data, never markup."""
+    return _MD_ACTIVE.sub(r"\\\1", text)
+
+
 def to_markdown(resume: Resume) -> str:
     """Readable Markdown of the same content: `#` name, `##` sections, bold role lines."""
-    lines: List[str] = [f"# {resume.name}", ""]
+    lines: List[str] = [f"# {_md(resume.name)}", ""]
     if resume.headline:
-        lines += [f"*{resume.headline}*", ""]
+        lines += [f"*{_md(resume.headline)}*", ""]
     contact = contact_items(resume)
     if contact:
-        lines += [" | ".join(contact), ""]
+        lines += [" | ".join(_md(c) for c in contact), ""]
     if resume.summary:
-        lines += ["## Summary", "", resume.summary, ""]
+        lines += ["## Summary", "", _md(resume.summary), ""]
     for section in resume.sections:
-        lines += [f"## {section.title}", ""]
+        lines += [f"## {_md(section.title)}", ""]
         if section.text:
-            lines += [section.text, ""]
+            lines += [_md(section.text), ""]
         for row in section.skills:
-            lines.append(f"- **{row.label}:** {row.items}" if row.label else f"- {row.items}")
+            lines.append(f"- **{_md(row.label)}:** {_md(row.items)}" if row.label else f"- {_md(row.items)}")
         if section.skills:
             lines.append("")
         for e in section.entries:
-            head = ", ".join(x for x in (e.title, e.organization, e.location) if x)
+            head = ", ".join(_md(x) for x in (e.title, e.organization, e.location) if x)
             if e.dates:
-                head = f"{head} ({e.dates})" if head else e.dates
+                head = f"{head} ({_md(e.dates)})" if head else _md(e.dates)
             lines.append(f"**{head}**" if head else "")
-            lines += [f"- {b}" for b in e.bullets]
+            lines += [f"- {_md(b)}" for b in e.bullets]
             lines.append("")
     return "\n".join(lines).strip() + "\n"

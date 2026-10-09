@@ -12,7 +12,7 @@ os.environ["AZURE_OPENAI_API_KEY"] = ""
 os.environ["AZURE_OPENAI_ENDPOINT"] = ""
 os.environ["JWT_SECRET"] = "t" * 40
 
-import fitz
+import pymupdf as fitz
 import jwt
 from fastapi.testclient import TestClient
 
