@@ -85,6 +85,18 @@ class ApiTest(unittest.TestCase):
         resp = self.client.post("/analyze", files={"file": ("cv.pdf", b"not a pdf", "application/pdf")}, headers=auth_header())
         self.assertFalse(resp.json()["success"])
 
+    def test_generate_resume_returns_markdown_and_ten_latex_templates(self):
+        resp = self.client.post("/generate-resume", files=self.pdf, data={"job_description": "python"}, headers=auth_header())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["report"].startswith("# "))
+        self.assertEqual(len(body["latex"]), 10)
+        self.assertEqual({"id", "label", "description", "source", "tex"}, set(body["latex"][0]))
+        self.assertNotIn("latex", body["metadata"])  # large payload lives in its own field
+
+    def test_analyze_has_no_latex(self):
+        self.assertIsNone(self.client.post("/analyze", files=self.pdf, headers=auth_header()).json()["latex"])
+
     def test_generate_resume_requires_a_job_description(self):
         resp = self.client.post("/generate-resume", files=self.pdf, headers=auth_header())
         self.assertEqual(resp.status_code, 422)

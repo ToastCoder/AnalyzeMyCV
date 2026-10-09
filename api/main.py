@@ -84,9 +84,10 @@ async def _run_pipeline(
         if not report:
             raise HTTPException(status_code=502, detail=f"{label} failed. Please try again.")
 
+        latex = metadata.pop("latex", None)
         metadata["total_time_s"] = round(time.time() - start_time, 2)
         print(f"[Pipeline] {label} complete in {metadata['total_time_s']}s ({len(file_bytes) / 1024:.1f} KB PDF)")
-        return AnalysisResponse(report=report, metadata=metadata)
+        return AnalysisResponse(report=report, metadata=metadata, latex=latex)
 
     except ValueError as e:
         return AnalysisResponse(success=False, report=f"Input Error: {e}", metadata={"error_type": "Input Error"})

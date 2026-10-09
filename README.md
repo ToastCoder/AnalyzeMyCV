@@ -4,6 +4,14 @@ AI-powered resume analysis built with a FastAPI backend, a Streamlit frontend, a
 
 **Production URL:** [https://tinyurl.com/analyzemycv](https://tinyurl.com/analyzemycv)
 
+## Tailored resumes and LaTeX
+
+"Generate Tailored Resume" rewrites your resume for a job description and returns it as structured data. The app renders that into a Markdown preview and into ten self-contained LaTeX templates (Jake's Resume, four moderncv styles, and five built-in layouts). Pick one in the UI and download the `.tex`; compile it in Overleaf or with `pdflatex` / `xelatex` / `lualatex`.
+
+* Nothing is compiled on the server. The model never writes LaTeX: our code fills the templates and escapes every character, so a resume containing `\input{...}` or `\write18{...}` comes out as plain text.
+* Templates live in `api/services/latex_templates.py`. Jake's Resume is MIT-licensed (Jake Gutierrez, based on sb2nov/resume); the moderncv templates use the `moderncv` class (LPPL) from TeX Live.
+* To test compilation locally, install [Tectonic](https://tectonic-typesetting.github.io) (`brew install tectonic`); `tests/test_latex_templates.py` then compiles every template. Without it that test is skipped.
+
 ## Architecture
 
 ```
