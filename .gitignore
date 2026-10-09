@@ -235,3 +235,8 @@ data/
 # Local assistant/tool folders (may hold machine-specific settings)
 .claude/
 .agents/
+
+# Local environment files (may hold production secrets); only the example is tracked
+.env
+.env.*
+!.env.example

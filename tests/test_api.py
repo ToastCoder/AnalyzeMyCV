@@ -8,6 +8,9 @@ import unittest
 
 # Must be set before the api modules are imported. An empty (not missing) key stops
 # load_dotenv from filling in real credentials from a developer's .env.
+# A developer's .env.local may hold production Clerk keys; tests must never pick them up.
+for _name in ("CLERK_SECRET_KEY", "CLERK_PUBLISHABLE_KEY", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES"):
+    os.environ[_name] = ""
 os.environ["AZURE_OPENAI_API_KEY"] = ""
 os.environ["AZURE_OPENAI_ENDPOINT"] = ""
 os.environ["JWT_SECRET"] = "t" * 40
@@ -93,6 +96,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(len(body["latex"]), 10)
         self.assertEqual({"id", "label", "description", "source", "tex"}, set(body["latex"][0]))
         self.assertNotIn("latex", body["metadata"])  # large payload lives in its own field
+        self.assertTrue(body["metadata"]["tailoring_notes"])
 
     def test_analyze_has_no_latex(self):
         self.assertIsNone(self.client.post("/analyze", files=self.pdf, headers=auth_header()).json()["latex"])

@@ -351,6 +351,8 @@ app = make_app()
 if __name__ == "__main__":
     print(f"Proxy: Starting on port {PROXY_PORT}, forwarding to Streamlit on {STREAMLIT_PORT}")
     print(f"Proxy: Clerk authentication enabled: {clerk_auth.ENABLED}")
+    for warning in clerk_auth.configuration_warnings():
+        print(f"Proxy: WARNING: {warning}")
     if clerk_auth.CONFIGURED and not clerk_auth.ENABLED:
         print("Proxy: WARNING: CLERK_PUBLISHABLE_KEY is invalid or JWT_SECRET is shorter than 32 characters; refusing all requests")
     web.run_app(app, host="0.0.0.0", port=PROXY_PORT)

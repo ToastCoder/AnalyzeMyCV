@@ -10,6 +10,9 @@ import subprocess
 import tempfile
 import unittest
 
+# A developer's .env.local may hold production Clerk keys; tests must never pick them up.
+for _name in ("CLERK_SECRET_KEY", "CLERK_PUBLISHABLE_KEY", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES"):
+    os.environ[_name] = ""
 os.environ["AZURE_OPENAI_API_KEY"] = ""
 os.environ["AZURE_OPENAI_ENDPOINT"] = ""
 
@@ -217,6 +220,15 @@ class GenerateFlowTest(unittest.TestCase):
         self.assertEqual(md.count("\n- "), 3)
         md, _ = self.analyzer([self.reply(2), self.reply(1)]).generate_tailored_resume(self.SOURCE, "job")
         self.assertEqual(md.count("\n- "), 2)  # a worse retry never replaces a better first answer
+
+    def test_notes_reach_the_ui_escaped_and_stay_out_of_the_resume(self):
+        reply = json.loads(self.reply(3))
+        reply["notes"] = ["Moved the bot first", "Gap: ![x](https://a.io/?q=1) Kubernetes"]
+        md, meta = self.analyzer([json.dumps(reply)]).generate_tailored_resume(self.SOURCE, "job")
+        self.assertEqual(meta["tailoring_notes"][0], "Moved the bot first")
+        self.assertNotIn("![", meta["tailoring_notes"][1])
+        self.assertNotIn("Moved the bot first", md)
+        self.assertTrue(all("Moved the bot first" not in item["tex"] for item in meta["latex"]))
 
     def test_mock_mode_returns_sample_templates(self):
         md, meta = LLMAnalyzer().generate_tailored_resume(self.SOURCE, "job")

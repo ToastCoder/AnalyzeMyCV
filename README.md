@@ -38,8 +38,8 @@ With `CLERK_PUBLISHABLE_KEY` empty, the app signs you in as `LOCAL_DEV_USER_EMAI
 
 ## Production setup (Azure App Service)
 
-1. **Clerk:** create an application at [dashboard.clerk.com](https://dashboard.clerk.com). A *development* instance works on `*.azurewebsites.net` but shows a dev banner; a *production* instance requires a custom domain you own.
-2. **Environment variables:** set the following in App Service.
+1. **Clerk:** create an application at [dashboard.clerk.com](https://dashboard.clerk.com). A *development* instance works on `*.azurewebsites.net` but shows a dev banner; a *production* instance requires a custom domain you own, with the DNS records Clerk lists; it cannot run on `*.azurewebsites.net`. The proxy warns at startup if the Frontend API host does not resolve. Once the production instance works, set `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` and `CLERK_AUTHORIZED_PARTIES` in App Service, and add the `name`/`email` session claims to it (`clerk config patch --instance prod`).
+2. **Environment variables:** set the following in App Service. For local runs, `.env.local` overrides `.env` (both git-ignored).
    * `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME` (`gpt-5-mini`)
    * `JWT_SECRET`: at least 32 random characters (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
    * `CLERK_PUBLISHABLE_KEY`, and optionally `CLERK_SECRET_KEY` (email/name lookup) and `CLERK_AUTHORIZED_PARTIES`

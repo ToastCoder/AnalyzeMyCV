@@ -15,17 +15,20 @@ from dotenv import load_dotenv
 from openai import AzureOpenAI
 
 from api.services.latex_templates import render_all
-from api.services.resume_data import Resume, parse_resume_json, to_markdown
+from api.services.resume_data import Resume, md_escape, parse_resume_json, to_markdown
 
-load_dotenv()
+_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_ROOT / ".env.local")
+load_dotenv(_ROOT / ".env")
 
-SETTINGS_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.json"
+SETTINGS_PATH = _ROOT / "config" / "settings.json"
 DEFAULT_API_VERSION = "2025-03-01-preview"
 MOCK_RESUME = Resume.model_validate({
     "name": "Sample Candidate", "headline": "Mock resume: no Azure OpenAI credentials are configured",
     "email": "sample@example.com", "phone": "+1 555 0100", "location": "Anywhere",
     "links": [{"label": "example.com/sample", "url": "https://example.com/sample"}],
     "summary": "This is sample content so the templates can be previewed without calling the model.",
+    "notes": ["Mock mode: nothing was tailored.", "Gap: set Azure OpenAI credentials to generate a real tailored resume."],
     "sections": [
         {"title": "Skills", "skills": [{"label": "Languages", "items": "Python, SQL"}]},
         {"title": "Experience", "entries": [{"title": "Software Engineer", "organization": "Example Corp", "location": "Remote",
@@ -307,4 +310,5 @@ class LLMAnalyzer:
             "model_used": model,
             "response_time_s": round(elapsed, 2),
             "latex": render_all(resume),
+            "tailoring_notes": [md_escape(n) for n in resume.notes],  # shown as Markdown, so escaped like the resume
         }
