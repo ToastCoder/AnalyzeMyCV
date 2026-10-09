@@ -2,8 +2,6 @@
 
 AI-powered resume analysis built with a FastAPI backend, a Streamlit frontend, and Azure OpenAI (GPT-5 Mini). It scores resumes, compares them against job descriptions, and generates tailored rewrites. It's hosted on Azure App Service.
 
-**Production URL:** [https://tinyurl.com/analyzemycv](https://tinyurl.com/analyzemycv)
-
 ## Tailored resumes and LaTeX
 
 "Generate Tailored Resume" rewrites your resume for a job description and returns it as structured data. The app renders that into a Markdown preview and into ten self-contained LaTeX templates (Jake's Resume, four moderncv styles, and five built-in layouts). Pick one in the UI and download the `.tex`; compile it in Overleaf or with `pdflatex` / `xelatex` / `lualatex`.
@@ -28,7 +26,7 @@ Browser ──▶ proxy.py :8000 ──▶ Streamlit 127.0.0.1:8001 ──▶ Fa
 Requires Python 3.9–3.11.
 
 ```bash
-git clone https://github.com/ToastCoder/AnalyzeMyCV.git
+git clone https://github.com/<your-username>/AnalyzeMyCV.git
 cd AnalyzeMyCV
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -54,7 +52,11 @@ Password reset and email verification are handled by Clerk. To disable a user, b
 
 ## Security notes
 
-* `X-Auth-*` identity headers are set only by the proxy after it verifies the Clerk session; client-sent copies are dropped. If Clerk is misconfigured, the proxy returns 503 instead of serving the app.
-* FastAPI and Streamlit listen only on `127.0.0.1`. `proxy.py` is the only public listener, and it adds anti-framing, `nosniff`, referrer and HSTS headers.
-* Uploads are capped at 8 MB. The LLM endpoints allow one request per user every 5 minutes. Error responses never include exception details. Resume content is never logged.
-* Keep secrets in App Service settings or Key Vault, never in git. Rotate `JWT_SECRET` and the Azure OpenAI key if they're exposed.
+* **Identity:** `X-Auth-*` headers are set only by the proxy after it verifies the Clerk session; client-sent copies are dropped. If Clerk is misconfigured the proxy returns 503 instead of serving the app. Session cookies are never forwarded to Streamlit.
+* **Request hardening (`proxy.py`):** paths with dot segments, encoded slashes or double encoding are rejected (they could make the public-path rule and Streamlit disagree about the route); the original encoded path is forwarded untouched; WebSocket and state-changing requests whose `Origin` is another site are refused (set `ALLOWED_HOSTS` if your host rewrites the `Host` header); only `GET`/`HEAD` can use the public paths (`/static/`, health).
+* **Recommended in production:** set `CLERK_AUTHORIZED_PARTIES` to your site's origin(s) so session tokens minted for any other origin are rejected. `SESSION_TTL_SECONDS` (default 3600) is how long a Clerk ban can take to apply.
+* **Model output is untrusted:** the analysis report has images stripped and links flattened to `text (url)` (an image URL carrying resume text would otherwise be fetched by the browser with no click); tailored resumes are validated data, Markdown-escaped, and LaTeX-escaped (see above).
+* FastAPI and Streamlit listen only on `127.0.0.1`. `proxy.py` is the only public listener, and every response it sends carries anti-framing, `nosniff`, referrer and HSTS headers.
+* Uploads are capped at 8 MB, 15 pages and 50,000 characters. The LLM endpoints allow one request per user every 5 minutes, shared across both. Error responses never include exception details. Resume content is never logged.
+* GitHub Actions are pinned to commit hashes; update them deliberately. Dependencies are not pinned, so run a dependency audit (for example `pip-audit -r requirements.txt`) regularly.
+* Keep secrets in App Service settings or Key Vault, never in git. Rotate `JWT_SECRET`, the Clerk secret key and the Azure OpenAI key if they're exposed.

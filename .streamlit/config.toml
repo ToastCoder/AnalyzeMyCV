@@ -8,3 +8,12 @@ font="sans serif"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# Explicit rather than relying on defaults: these two guard the websocket/upload endpoints.
+enableXsrfProtection = true
+enableCORS = true
+
+[client]
+# Hides developer menu items (Deploy, bug reports) from end users.
+toolbarMode = "minimal"
