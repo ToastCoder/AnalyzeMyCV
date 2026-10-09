@@ -4,6 +4,7 @@
 
 import os
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import unquote
 
@@ -12,7 +13,9 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
+_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_ROOT / ".env.local")  # precedence: real env > .env.local > .env
+load_dotenv(_ROOT / ".env")
 
 # Configuration
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8080")
@@ -24,7 +27,7 @@ TOKEN_AUDIENCE = "analyzemycv-api"
 API_TOKEN_TTL_SECONDS = 300
 # proxy.py verifies the Clerk session and sets these headers (any client-sent copy is dropped
 # there). Same rule as proxy.py: they are only trusted once Clerk is configured.
-CLERK_ENABLED = bool(os.getenv("CLERK_PUBLISHABLE_KEY", "").strip())
+CLERK_ENABLED = bool((os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY") or "").strip())
 SIGN_IN_PATH = "/auth/sign-in?redirect=/"
 SIGN_OUT_PATH = "/auth/sign-out"
 
@@ -121,6 +124,10 @@ def show_tailored_resume(result: dict) -> None:
     Nothing is compiled by this app: the .tex is meant for Overleaf or a local TeX install."""
     st.subheader("Tailored Resume")
     st.caption("AI-generated from your resume. Check names, dates, and bullet points against your original before sending it anywhere.")
+    notes = result.get("metadata", {}).get("tailoring_notes") or []
+    if notes:
+        with st.expander("What was changed, and gaps to address", expanded=True):
+            st.markdown("\n".join(f"- {note}" for note in notes))  # escaped by the API
     # A radio, not st.tabs: tabs reset to the first one on every rerun, which would bounce the
     # user out of the LaTeX view each time they pick a template.
     view = st.radio("View", ["Preview", "LaTeX templates"], horizontal=True, label_visibility="collapsed", key="tailored_view")

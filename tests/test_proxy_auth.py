@@ -3,6 +3,7 @@
 """Clerk session handling in proxy.py, with a fake upstream and a locally generated Clerk key."""
 
 import gzip
+import os
 import json
 import time
 import unittest
@@ -13,6 +14,10 @@ import jwt
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestServer
 from cryptography.hazmat.primitives.asymmetric import rsa
+
+# A developer's .env.local may hold production Clerk keys; tests must never pick them up.
+for _name in ("CLERK_SECRET_KEY", "CLERK_PUBLISHABLE_KEY", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES"):
+    os.environ[_name] = ""
 
 import clerk_auth
 import proxy
@@ -325,6 +330,54 @@ class JwksCooldownTest(unittest.TestCase):
             for i in range(50):
                 self.assertIsNone(clerk_auth._signing_key(f"random-kid-{i}"))
             self.assertEqual(fake.calls, 1)
+
+
+class ClerkConfigTest(unittest.TestCase):
+    TEST_KEY = "pk_test_dGVzdC1hcHAuY2xlcmsuYWNjb3VudHMuZGV2JA"  # decodes to test-app.clerk.accounts.dev$
+
+    def test_the_nextjs_style_key_name_from_clerk_env_pull_is_accepted(self):
+        import subprocess
+        import sys
+        env = {**os.environ, "CLERK_PUBLISHABLE_KEY": "", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": self.TEST_KEY, "JWT_SECRET": "s" * 40}
+        out = subprocess.run(
+            [sys.executable, "-c", "import clerk_auth as c; print(c.ENABLED, c.FRONTEND_HOST)"],
+            capture_output=True, text=True, env=env, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=60,
+        ).stdout.split()
+        self.assertEqual(out, ["True", "test-app.clerk.accounts.dev"])
+
+    def test_env_local_key_beats_an_older_key_in_env_but_not_a_real_environment_variable(self):
+        local = {"NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": " pk_live_new "}
+        environ = {}
+        clerk_auth._adopt_local_publishable_key(environ, local)
+        self.assertEqual(environ["CLERK_PUBLISHABLE_KEY"], "pk_live_new")  # set before .env is read, so .env cannot override it
+        environ = {"CLERK_PUBLISHABLE_KEY": "pk_test_from_azure"}
+        clerk_auth._adopt_local_publishable_key(environ, local)
+        self.assertEqual(environ["CLERK_PUBLISHABLE_KEY"], "pk_test_from_azure")
+        environ = {"NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_explicit"}
+        clerk_auth._adopt_local_publishable_key(environ, local)
+        self.assertNotIn("CLERK_PUBLISHABLE_KEY", environ)
+        environ = {"CLERK_PUBLISHABLE_KEY": ""}  # explicitly switched off
+        clerk_auth._adopt_local_publishable_key(environ, local)
+        self.assertEqual(environ["CLERK_PUBLISHABLE_KEY"], "")
+        environ = {}
+        clerk_auth._adopt_local_publishable_key(environ, {})
+        self.assertEqual(environ, {})
+
+    def test_warns_when_the_frontend_host_does_not_resolve(self):
+        with mock.patch.object(clerk_auth, "FRONTEND_HOST", "clerk.nonexistent-host.invalid"):
+            warnings = clerk_auth.configuration_warnings()
+        self.assertTrue(any("does not resolve" in w for w in warnings))
+
+    def test_warns_about_a_production_key_without_authorized_parties(self):
+        with mock.patch.object(clerk_auth, "FRONTEND_HOST", "localhost"), \
+                mock.patch.object(clerk_auth, "PUBLISHABLE_KEY", "pk_live_x"), mock.patch.object(clerk_auth, "AUTHORIZED_PARTIES", set()):
+            self.assertTrue(any("CLERK_AUTHORIZED_PARTIES" in w for w in clerk_auth.configuration_warnings()))
+            with mock.patch.object(clerk_auth, "AUTHORIZED_PARTIES", {"https://app.example.com"}):
+                self.assertEqual(clerk_auth.configuration_warnings(), [])
+
+    def test_no_warnings_without_clerk(self):
+        with mock.patch.object(clerk_auth, "FRONTEND_HOST", ""):
+            self.assertEqual(clerk_auth.configuration_warnings(), [])
 
 
 class PublishableKeyTest(unittest.TestCase):

@@ -14,19 +14,35 @@ import asyncio
 import base64
 import os
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 from urllib.parse import quote
 
 import jwt
 from aiohttp import ClientSession, ClientTimeout
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
-load_dotenv()
+# Precedence: real environment variables > .env.local (for example `clerk env pull`) > .env
+ROOT = Path(__file__).resolve().parent
+# `clerk env pull` writes the Next.js-style name. Map it onto ours *before* .env loads, so a key
+# in .env.local (say, production) still beats an older CLERK_PUBLISHABLE_KEY left in .env.
+def _adopt_local_publishable_key(environ, local_values) -> None:
+    key = (local_values.get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY") or "").strip()
+    # A real environment variable under either name always wins over the files, even when empty
+    # (an empty value is how a developer or a test switches Clerk off on purpose).
+    if key and "CLERK_PUBLISHABLE_KEY" not in environ and "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" not in environ:
+        environ["CLERK_PUBLISHABLE_KEY"] = key
 
-PUBLISHABLE_KEY = os.getenv("CLERK_PUBLISHABLE_KEY", "").strip()
+
+_adopt_local_publishable_key(os.environ, dotenv_values(ROOT / ".env.local"))
+load_dotenv(ROOT / ".env.local")
+load_dotenv(ROOT / ".env")
+
+PUBLISHABLE_KEY = (os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY") or "").strip()
 # Optional: lets the proxy look up the user's email and name (session tokens carry only the id).
 SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "").strip()
 JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
@@ -85,6 +101,24 @@ def _signing_key(kid: str):
             except jwt.PyJWTError:
                 pass
         return _keys_by_kid.get(kid)
+
+
+def configuration_warnings() -> list:
+    """Misconfigurations that would otherwise surface only as a broken sign-in page."""
+    if not FRONTEND_HOST:
+        return []
+    warnings = []
+    try:
+        socket.getaddrinfo(FRONTEND_HOST, 443)
+    except OSError:
+        warnings.append(
+            f"Clerk's Frontend API host {FRONTEND_HOST} does not resolve in DNS, so sign-in cannot work. "
+            "A Clerk production instance needs a domain you own with the DNS records Clerk lists "
+            "(it cannot run on *.azurewebsites.net)."
+        )
+    if PUBLISHABLE_KEY.startswith("pk_live_") and not AUTHORIZED_PARTIES:
+        warnings.append("Production Clerk key without CLERK_AUTHORIZED_PARTIES: set it to your site's origin.")
+    return warnings
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ No credentials or user records are stored by this application.
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import jwt
@@ -19,7 +20,10 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-load_dotenv()  # local development: JWT_SECRET comes from .env (App Service sets real environment variables)
+# Local development: values come from .env.local, then .env (App Service sets real environment variables).
+_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_ROOT / ".env.local")
+load_dotenv(_ROOT / ".env")
 
 logger = logging.getLogger(__name__)
 

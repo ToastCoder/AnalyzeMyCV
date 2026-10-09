@@ -8,7 +8,7 @@ see bounded, control-character-free text."""
 import json
 import re
 import unicodedata
-from typing import List, Optional
+from typing import List
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
@@ -125,6 +125,13 @@ class Resume(_Model):
     links: List[Link] = Field(default_factory=list, max_length=6)
     summary: str = Field("", max_length=1500)
     sections: List[Section] = Field(default_factory=list, max_length=12)
+    # Advice for the candidate (what changed, requirement gaps); shown in the UI, never in a resume.
+    notes: List[str] = Field(default_factory=list, max_length=9)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _notes(cls, v):
+        return [n[:200] for n in (_clean(x) for x in (v or [])[:9]) if n]
 
     @field_validator("name", "headline", "phone", "location", "summary", mode="before")
     @classmethod
@@ -177,7 +184,7 @@ def contact_items(resume: Resume) -> List[str]:
 _MD_ACTIVE = re.compile(r"([\\`\[\]<>])")
 
 
-def _md(text: str) -> str:
+def md_escape(text: str) -> str:
     """Neutralize Markdown that could fetch or link anything: `![x](https://host/?q=...)` would be
     rendered as an image the browser loads without a click. Model-written text is data, never markup."""
     return _MD_ACTIVE.sub(r"\\\1", text)
@@ -185,27 +192,27 @@ def _md(text: str) -> str:
 
 def to_markdown(resume: Resume) -> str:
     """Readable Markdown of the same content: `#` name, `##` sections, bold role lines."""
-    lines: List[str] = [f"# {_md(resume.name)}", ""]
+    lines: List[str] = [f"# {md_escape(resume.name)}", ""]
     if resume.headline:
-        lines += [f"*{_md(resume.headline)}*", ""]
+        lines += [f"*{md_escape(resume.headline)}*", ""]
     contact = contact_items(resume)
     if contact:
-        lines += [" | ".join(_md(c) for c in contact), ""]
+        lines += [" | ".join(md_escape(c) for c in contact), ""]
     if resume.summary:
-        lines += ["## Summary", "", _md(resume.summary), ""]
+        lines += ["## Summary", "", md_escape(resume.summary), ""]
     for section in resume.sections:
-        lines += [f"## {_md(section.title)}", ""]
+        lines += [f"## {md_escape(section.title)}", ""]
         if section.text:
-            lines += [_md(section.text), ""]
+            lines += [md_escape(section.text), ""]
         for row in section.skills:
-            lines.append(f"- **{_md(row.label)}:** {_md(row.items)}" if row.label else f"- {_md(row.items)}")
+            lines.append(f"- **{md_escape(row.label)}:** {md_escape(row.items)}" if row.label else f"- {md_escape(row.items)}")
         if section.skills:
             lines.append("")
         for e in section.entries:
-            head = ", ".join(_md(x) for x in (e.title, e.organization, e.location) if x)
+            head = ", ".join(md_escape(x) for x in (e.title, e.organization, e.location) if x)
             if e.dates:
-                head = f"{head} ({_md(e.dates)})" if head else _md(e.dates)
+                head = f"{head} ({md_escape(e.dates)})" if head else md_escape(e.dates)
             lines.append(f"**{head}**" if head else "")
-            lines += [f"- {_md(b)}" for b in e.bullets]
+            lines += [f"- {md_escape(b)}" for b in e.bullets]
             lines.append("")
     return "\n".join(lines).strip() + "\n"
