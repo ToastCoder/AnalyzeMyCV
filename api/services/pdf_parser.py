@@ -4,7 +4,7 @@
 import logging
 import re
 
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def parse_pdf(file_bytes: bytes) -> str:
     """Extract all text from a PDF. Returns "" if the file can't be read;
     raises PdfTooLargeError if it is too long to process."""
     try:
-        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+        with pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
             if doc.page_count > MAX_PDF_PAGES:
                 raise PdfTooLargeError(f"The PDF has too many pages. Maximum is {MAX_PDF_PAGES}.")
             parts, total = [], 0

@@ -15,8 +15,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 import jwt
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+load_dotenv()  # local development: JWT_SECRET comes from .env (App Service sets real environment variables)
 
 logger = logging.getLogger(__name__)
 

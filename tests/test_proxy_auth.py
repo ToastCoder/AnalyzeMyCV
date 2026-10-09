@@ -3,9 +3,9 @@
 """Clerk session handling in proxy.py, with a fake upstream and a locally generated Clerk key."""
 
 import gzip
+import json
 import time
 import unittest
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from unittest import mock
 
@@ -31,9 +31,15 @@ def clerk_token(key=CLERK_KEY, sub="user_123", iss=ISSUER, exp_in=60, **extra):
     return jwt.encode(claims, key, algorithm="RS256")
 
 
-class FakeJWKS:
-    def get_signing_key_from_jwt(self, token):
-        return SimpleNamespace(key=CLERK_KEY.public_key())
+class CountingJWKS:
+    """Stands in for Clerk's key endpoint and counts how often it is asked."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_signing_keys(self, refresh=False):
+        self.calls += 1
+        return []
 
 
 class ProxyAuthTest(AioHTTPTestCase):
@@ -56,7 +62,7 @@ class ProxyAuthTest(AioHTTPTestCase):
             mock.patch.object(clerk_auth, "FRONTEND_HOST", HOST),
             mock.patch.object(clerk_auth, "SECRET_KEY", ""),
             mock.patch.object(clerk_auth, "AUTHORIZED_PARTIES", set()),
-            mock.patch.object(clerk_auth, "_jwks_client", FakeJWKS()),
+            mock.patch.object(clerk_auth, "_signing_key", lambda kid: CLERK_KEY.public_key()),
         ]
         for p in patches:
             p.start()
@@ -108,12 +114,12 @@ class ProxyAuthTest(AioHTTPTestCase):
         self.assertEqual(await resp.json(), {"X-Auth-User-Id": "user_123"})
 
     async def test_name_and_email_claims_reach_upstream_percent_encoded(self):
-        token = clerk_token(name="Vignesh K R \u00e9", email="vicky@example.com")
+        token = clerk_token(name="Jane Q Public \u00e9", email="jane@example.com")
         resp = await self.client.get("/", cookies={"__session": token})
         self.assertEqual(await resp.json(), {
             "X-Auth-User-Id": "user_123",
-            "X-Auth-Email": "vicky%40example.com",
-            "X-Auth-Name": "Vignesh%20K%20R%20%C3%A9",
+            "X-Auth-Email": "jane%40example.com",
+            "X-Auth-Name": "Jane%20Q%20Public%20%C3%A9",
         })
 
     async def test_rejects_bad_clerk_tokens(self):
@@ -224,11 +230,108 @@ class ProxyAuthTest(AioHTTPTestCase):
             self.assertEqual(await resp.json(), {})
 
 
+class ProxyHardeningTest(AioHTTPTestCase):
+    """The /static/ bypass, cross-origin refusal, cookie stripping and JWKS refetch limits."""
+
+    async def get_application(self):
+        async def echo(request):
+            return web.json_response({"path": request.raw_path, "cookie": request.headers.get("Cookie", "")})
+
+        upstream = web.Application()
+        upstream.router.add_route("*", "/{p:.*}", echo)
+        self.upstream = TestServer(upstream)
+        await self.upstream.start_server()
+        for p in (
+            mock.patch.object(proxy, "STREAMLIT_PORT", self.upstream.port),
+            mock.patch.object(clerk_auth, "ENABLED", True),
+            mock.patch.object(clerk_auth, "JWT_SECRET", SECRET),
+            mock.patch.object(clerk_auth, "ISSUER", ISSUER),
+            mock.patch.object(clerk_auth, "_signing_key", lambda kid: CLERK_KEY.public_key()),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addAsyncCleanup(self.upstream.close)
+        return proxy.make_app()
+
+    async def raw_get(self, path, headers=None):
+        """Send the path exactly as written; the client library would otherwise normalize it."""
+        import aiohttp
+        from yarl import URL
+        url = URL(f"http://{self.server.host}:{self.server.port}{path}", encoded=True)
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers or {}, allow_redirects=False) as r:
+                return r.status, await r.text()
+
+    async def test_dot_segments_cannot_borrow_the_public_static_prefix(self):
+        for path in ("/static/../_stcore/host-config", "/static/%2e%2e/_stcore/host-config",
+                     "/static/..%2f_stcore/host-config", "/static/./../media/x", "/static/%2E%2E/x",
+                     "/static%5c..%5cmedia", "/static/%252e%252e/x", "/static/x%00"):
+            with self.subTest(path):
+                status, _ = await self.raw_get(path)
+                self.assertEqual(status, 400)
+
+    async def test_legitimate_static_and_health_stay_public_for_reads_only(self):
+        status, _ = await self.raw_get("/static/js/index.abc123.js")
+        self.assertEqual(status, 200)
+        post = await self.client.post("/static/js/index.abc123.js")
+        self.assertEqual(post.status, 401)
+        self.assertEqual((await self.client.post("/_stcore/health")).status, 401)
+
+    async def test_upstream_receives_the_original_encoded_path(self):
+        status, body = await self.raw_get("/static/a%20b.js?x=%3F&y=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["path"], "/static/a%20b.js?x=%3F&y=1")
+
+    async def test_cross_origin_writes_and_websockets_are_refused(self):
+        cookies = {"__session": clerk_token()}
+        host = f"{self.server.host}:{self.server.port}"
+        evil = await self.client.post("/_stcore/upload_file/x", headers={"Origin": "https://evil.example"}, cookies=cookies)
+        self.assertEqual(evil.status, 403)
+        null = await self.client.post("/_stcore/upload_file/x", headers={"Origin": "null"}, cookies=cookies)
+        self.assertEqual(null.status, 403)
+        ws = await self.client.get("/_stcore/stream", headers={"Origin": "https://evil.example", "Upgrade": "websocket",
+                                                              "Connection": "Upgrade"}, cookies=cookies)
+        self.assertEqual(ws.status, 403)
+        # Same-origin and header-less (non-browser) requests are fine.
+        same = await self.client.post("/_stcore/upload_file/x", headers={"Origin": f"http://{host}"}, cookies=cookies)
+        self.assertEqual(same.status, 200)
+        self.assertEqual((await self.client.post("/_stcore/upload_file/x", cookies=cookies)).status, 200)
+        # Plain GETs from other origins are unaffected (they are just navigations).
+        self.assertEqual((await self.client.get("/", headers={"Origin": "https://evil.example"}, cookies=cookies)).status, 200)
+
+    async def test_allowed_hosts_setting_extends_the_origin_check(self):
+        with mock.patch.object(proxy, "EXTRA_ALLOWED_HOSTS", {"app.example.com"}):
+            resp = await self.client.post("/_stcore/upload_file/x", headers={"Origin": "https://app.example.com"},
+                                          cookies={"__session": clerk_token()})
+            self.assertEqual(resp.status, 200)
+
+    async def test_session_cookies_are_not_forwarded_to_streamlit(self):
+        cookie = "_streamlit_xsrf=abc; __session=SECRET1; theme=dark; amc_session=SECRET2; __client_uat=1; __clerk_db_jwt=SECRET3"
+        resp = await self.client.get("/", headers={"Cookie": cookie}, cookies=None)
+        # The proxy authenticates via the cookies, so supply a valid one in the header.
+        resp = await self.client.get("/", headers={"Cookie": f"{cookie}; __session={clerk_token()}"})
+        forwarded = (await resp.json())["cookie"]
+        for secret in ("SECRET1", "SECRET2", "SECRET3", "__session", "amc_session", "__client_uat", "__clerk"):
+            self.assertNotIn(secret, forwarded)
+        self.assertIn("_streamlit_xsrf=abc", forwarded)
+        self.assertIn("theme=dark", forwarded)
+
+
+class JwksCooldownTest(unittest.TestCase):
+    def test_unknown_key_ids_cannot_make_us_refetch_the_key_set_repeatedly(self):
+        fake = CountingJWKS()
+        with mock.patch.object(clerk_auth, "_jwks_client", fake), mock.patch.object(clerk_auth, "_keys_by_kid", {}), \
+                mock.patch.object(clerk_auth, "_keys_refreshed_at", None):
+            for i in range(50):
+                self.assertIsNone(clerk_auth._signing_key(f"random-kid-{i}"))
+            self.assertEqual(fake.calls, 1)
+
+
 class PublishableKeyTest(unittest.TestCase):
     def test_frontend_host_is_decoded(self):
         self.assertEqual(
-            clerk_auth._frontend_host("pk_test_ZnVuLWZveGhvdW5kLTg5NjguY2xlcmsuYWNjb3VudHMuZGV2JA"),
-            "fun-foxhound-8968.clerk.accounts.dev",
+            clerk_auth._frontend_host("pk_test_dGVzdC1hcHAuY2xlcmsuYWNjb3VudHMuZGV2JA"),
+            "test-app.clerk.accounts.dev",
         )
 
     def test_invalid_keys_yield_no_host(self):
